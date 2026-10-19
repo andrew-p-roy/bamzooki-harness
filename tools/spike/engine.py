@@ -104,7 +104,65 @@ def screenshot(png: Path, pid: int) -> None:
     subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=False)
 
 
-def engine_windows(pid: int) -> list[int]:
+class DesktopProcess:
+    """Bonsai.exe launched on a separate, never-shown Windows desktop (CreateDesktop).
+    Minimal Popen-like interface: pid, returncode, poll(), wait(timeout), kill()."""
+
+    def __init__(self, cmd: list[str], cwd: Path, name: str = "bamzooki-harness"):
+        import ctypes
+        from ctypes import wintypes
+
+        k32, user32 = ctypes.windll.kernel32, ctypes.windll.user32
+        user32.CreateDesktopW.restype = wintypes.HANDLE
+        self.hdesk = user32.CreateDesktopW(name, None, None, 0, 0x10000000, None)  # GENERIC_ALL
+        if not self.hdesk:
+            raise OSError(f"CreateDesktop failed: {ctypes.GetLastError()}")
+
+        class STARTUPINFOW(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("lpReserved", wintypes.LPWSTR), ("lpDesktop", wintypes.LPWSTR),
+                        ("lpTitle", wintypes.LPWSTR), ("dwX", wintypes.DWORD), ("dwY", wintypes.DWORD),
+                        ("dwXSize", wintypes.DWORD), ("dwYSize", wintypes.DWORD),
+                        ("dwXCountChars", wintypes.DWORD), ("dwYCountChars", wintypes.DWORD),
+                        ("dwFillAttribute", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                        ("wShowWindow", wintypes.WORD), ("cbReserved2", wintypes.WORD),
+                        ("lpReserved2", ctypes.c_void_p), ("hStdInput", wintypes.HANDLE),
+                        ("hStdOutput", wintypes.HANDLE), ("hStdError", wintypes.HANDLE)]
+
+        class PROCESS_INFORMATION(ctypes.Structure):
+            _fields_ = [("hProcess", wintypes.HANDLE), ("hThread", wintypes.HANDLE),
+                        ("dwProcessId", wintypes.DWORD), ("dwThreadId", wintypes.DWORD)]
+
+        si = STARTUPINFOW()
+        si.cb = ctypes.sizeof(si)
+        si.lpDesktop = name
+        pi = PROCESS_INFORMATION()
+        cmdline = subprocess.list2cmdline(cmd)
+        if not k32.CreateProcessW(None, ctypes.create_unicode_buffer(cmdline), None, None, False, 0, None,
+                                  str(cwd), ctypes.byref(si), ctypes.byref(pi)):
+            raise OSError(f"CreateProcess failed: {ctypes.GetLastError()}")
+        k32.CloseHandle(pi.hThread)
+        self._k32, self._h, self.pid, self.returncode = k32, pi.hProcess, pi.dwProcessId, None
+
+    def poll(self):
+        from ctypes import byref, c_ulong
+
+        code = c_ulong()
+        self._k32.GetExitCodeProcess(self._h, byref(code))
+        if code.value != 259:  # STILL_ACTIVE
+            self.returncode = code.value
+        return self.returncode
+
+    def wait(self, timeout: float | None = None):
+        ms = 0xFFFFFFFF if timeout is None else int(timeout * 1000)
+        if self._k32.WaitForSingleObject(self._h, ms) != 0:
+            raise subprocess.TimeoutExpired("Bonsai.exe", timeout)
+        return self.poll()
+
+    def kill(self):
+        self._k32.TerminateProcess(self._h, 1)
+
+
+def engine_windows(pid: int, hdesk=None) -> list[int]:
     """Top-level window handles owned by pid (Windows only)."""
     import ctypes
     from ctypes import wintypes
@@ -120,7 +178,10 @@ def engine_windows(pid: int) -> list[int]:
             found.append(hwnd)
         return True
 
-    user32.EnumWindows(cb, 0)
+    if hdesk:
+        user32.EnumDesktopWindows(hdesk, cb, 0)
+    else:
+        user32.EnumWindows(cb, 0)
     return found
 
 
@@ -135,16 +196,20 @@ def keepalive(proc: subprocess.Popen, mode: str, stop) -> None:
     WM_NULL, WM_ACTIVATE, WM_ACTIVATEAPP, WA_ACTIVE = 0x0000, 0x0006, 0x001C, 1
     activated = set()
     while not stop.is_set() and proc.poll() is None:
-        for hwnd in engine_windows(proc.pid):
+        for hwnd in engine_windows(proc.pid, getattr(proc, "hdesk", None)):
             if mode == "activate" and hwnd not in activated:
                 user32.PostMessageW(hwnd, WM_ACTIVATEAPP, 1, 0)
                 user32.PostMessageW(hwnd, WM_ACTIVATE, WA_ACTIVE, 0)
                 activated.add(hwnd)
             elif mode == "foreground" and hwnd not in activated:
-                VK_MENU, KEYUP = 0x12, 0x2
-                user32.keybd_event(VK_MENU, 0, 0, 0)  # lets this process pass the foreground lock
+                # Borrow the current foreground thread's input state so SetForegroundWindow is allowed.
+                # (Do NOT use the "tap Alt" trick: Alt puts the engine window into system-menu mode,
+                # a modal loop that freezes the engine's main loop.)
+                me = ctypes.windll.kernel32.GetCurrentThreadId()
+                fg_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
+                user32.AttachThreadInput(me, fg_thread, True)
                 user32.SetForegroundWindow(hwnd)
-                user32.keybd_event(VK_MENU, 0, KEYUP, 0)
+                user32.AttachThreadInput(me, fg_thread, False)
                 activated.add(hwnd)
             elif mode == "pump":
                 user32.PostMessageW(hwnd, WM_NULL, 0, 0)
@@ -179,7 +244,7 @@ def debug_listener(pid_box: list, out: Path, stop) -> None:
 
 
 def cmd_run(inst: Install, args: list[str], timeout: float, shots: list[float] = (), keep: str = "none",
-            log: Path | None = None, trace: Path | None = None) -> int:
+            log: Path | None = None, trace: Path | None = None, show: str = "normal") -> int:
     root = sandbox_dir(inst)
     watch = [root] + ([inst.save_dir] if inst.save_dir else []) + ([error_log()] if error_log() else [])
     watch += [Path.home() / "Documents" / "My BAMZOOKi"]
@@ -196,8 +261,33 @@ def cmd_run(inst: Install, args: list[str], timeout: float, shots: list[float] =
         listener = threading.Thread(target=debug_listener, args=(pid_box, trace, stop), daemon=True)
         listener.start()
         time.sleep(0.3)
-    proc = subprocess.Popen(cmd, cwd=root, stdin=subprocess.DEVNULL, stdout=sink, stderr=sink)
+    si = None
+    if show == "minimized" and sys.platform == "win32":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+    if show == "desktop":
+        proc = DesktopProcess(cmd, root)
+    else:
+        proc = subprocess.Popen(cmd, cwd=root, stdin=subprocess.DEVNULL, stdout=sink, stderr=sink, startupinfo=si)
     pid_box.append(proc.pid)
+    seen: dict[int, str] = {}
+    fg = {"samples": 0, "engine": 0}
+
+    def watch_windows():
+        import ctypes
+        while not stop.is_set() and proc.poll() is None:
+            hs = engine_windows(proc.pid, getattr(proc, "hdesk", None))
+            for h in hs:
+                buf = ctypes.create_unicode_buffer(200)
+                ctypes.windll.user32.GetWindowTextW(h, buf, 200)
+                seen[h] = buf.value
+            fg["samples"] += 1
+            fg["engine"] += ctypes.windll.user32.GetForegroundWindow() in hs
+            stop.wait(0.5)
+
+    if sys.platform == "win32":
+        threading.Thread(target=watch_windows, daemon=True).start()
     if keep != "none":
         threading.Thread(target=keepalive, args=(proc, keep, stop), daemon=True).start()
     for at in shots:
@@ -218,6 +308,7 @@ def cmd_run(inst: Install, args: list[str], timeout: float, shots: list[float] =
     time.sleep(0.3)
     stop.set()
     print(f"{status} in {time.time() - t0:.1f}s")
+    print(f"visible windows: {sorted(set(seen.values())) or 'none'}; foreground {fg['engine']}/{fg['samples']} samples")
     if trace:
         listener.join(2)
         print("--- Trace / OutputDebugString (tail) ---\n" + trace.read_text("latin-1")[-4000:])
@@ -247,6 +338,7 @@ def main() -> int:
     r.add_argument("--screenshot", type=float, action="append", default=[], help="seconds after launch (repeatable)")
     r.add_argument("--trace", type=Path, help="capture OutputDebugString (Trace) to this file")
     r.add_argument("--log", type=Path, help="redirect engine stdout/stderr to this file")
+    r.add_argument("--show", choices=["normal", "minimized", "desktop"], default="normal")
     r.add_argument("--keepalive", choices=["none", "activate", "pump", "foreground"], default="none")
     r.add_argument("args", nargs=argparse.REMAINDER)
     a = ap.parse_args()
@@ -260,7 +352,7 @@ def main() -> int:
         cmd_put(inst, a.src, a.name, a.plain, a.ext)
     elif a.cmd == "run":
         args = a.args[1:] if a.args[:1] == ["--"] else a.args
-        return cmd_run(inst, args, a.timeout, sorted(a.screenshot), a.keepalive, a.log, a.trace)
+        return cmd_run(inst, args, a.timeout, sorted(a.screenshot), a.keepalive, a.log, a.trace, a.show)
     return 0
 
 
