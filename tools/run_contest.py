@@ -44,7 +44,10 @@ def main() -> int:
     ap.add_argument("--record", action="store_true", help="save a .bvz replay")
     ap.add_argument("--video", action="store_true", help="capture frames and encode contest.mp4")
     ap.add_argument("--camera", choices=["split", "single"], default="split")
-    ap.add_argument("--window", default="1024x768", help="window size WxH")
+    ap.add_argument("--view", choices=["follow", "overview", "green", "red"], default="follow",
+                    help="view for --camera single / --video")
+    ap.add_argument("--window", help="window client size WxH (default: the engine's own window)")
+    ap.add_argument("--position", choices=["right", "left", "center", "none"], default="none")
     ap.add_argument("--raw-overrides", action="store_true", help="disable the default behaviour fixes")
     ap.add_argument("--focus", choices=["launch", "idle", "always"], default="idle")
     a = ap.parse_args()
@@ -58,8 +61,9 @@ def main() -> int:
     engine.prepare()
     info = contests.find(a.contest, engine.install)
     job = Job(info, zook_path(engine, a.green), zook_path(engine, a.red), seed=a.seed, duration=a.duration,
-              stop_on_finish=not a.no_stop, record=a.record, video=a.video, camera=a.camera,
-              window=tuple(int(x) for x in a.window.lower().split("x")))
+              stop_on_finish=not a.no_stop, record=a.record, video=a.video, camera=a.camera, view=a.view,
+              window=tuple(int(x) for x in a.window.lower().split("x")) if a.window else None,
+              position=a.position)
     if a.raw_overrides:
         job.overrides = {}
     r = engine.run(job, focus=a.focus)

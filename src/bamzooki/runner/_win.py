@@ -60,6 +60,37 @@ def focus(hwnd: int) -> None:
     _user32.AttachThreadInput(me, fg_thread, False)
 
 
+def client_size(hwnd: int) -> tuple[int, int]:
+    if not IS_WINDOWS:
+        return (0, 0)
+    cli = wintypes.RECT()
+    _user32.GetClientRect(hwnd, ctypes.byref(cli))
+    return cli.right - cli.left, cli.bottom - cli.top
+
+
+def place_window(hwnd: int, width: int, height: int, position: str = "right") -> None:
+    """Give a window a client (drawable) area of width x height and dock it in the primary
+    monitor's work area: "right" (top-right, leaving the left free for e.g. a terminal),
+    "left", "center", or "none" (keep where Windows put it)."""
+    if not IS_WINDOWS:
+        return
+    win, cli, work = wintypes.RECT(), wintypes.RECT(), wintypes.RECT()
+    _user32.GetWindowRect(hwnd, ctypes.byref(win))
+    _user32.GetClientRect(hwnd, ctypes.byref(cli))
+    outer_w = width + (win.right - win.left) - (cli.right - cli.left)
+    outer_h = height + (win.bottom - win.top) - (cli.bottom - cli.top)
+    _user32.SystemParametersInfoW(0x30, 0, ctypes.byref(work), 0)  # SPI_GETWORKAREA
+    x, y, flags = win.left, win.top, 0x4 | 0x10  # SWP_NOZORDER | SWP_NOACTIVATE
+    if position == "right":
+        x, y = work.right - outer_w, work.top
+    elif position == "left":
+        x, y = work.left, work.top
+    elif position == "center":
+        x = work.left + (work.right - work.left - outer_w) // 2
+        y = work.top + (work.bottom - work.top - outer_h) // 2
+    _user32.SetWindowPos(hwnd, 0, x, y, outer_w, outer_h, flags)
+
+
 def user_idle_seconds() -> float:
     """Seconds since the user's last keyboard/mouse input."""
     if not IS_WINDOWS:

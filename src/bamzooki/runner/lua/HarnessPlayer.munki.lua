@@ -25,25 +25,30 @@ function MessageHarnessStart(job)
 	World.OpenAccess(myWorld)
 	CreateLights()
 	myCamera = Agent.Create("HarnessCamera", 0, 0, job.window_w, job.window_h)
+	Agent.SendMessage("FitWindow", myCamera)
 	local v = job.view
-	Agent.SendMessage("SetView", myCamera, { zook = v.zook, target = Vector.New(0, 0, 0),
+	Agent.SendMessage("SetMinAngle", myCamera, v.min_angle)
+	Agent.SendMessage("SetView", myCamera, { zook = v.zook, target = v.target,
 		offset = v.offset, verticalViewAngle = v.angle, targetHeight = 0 })
 	World.EraseRemoteVisuals()
-	local rate, length = World.OpenVisualInput(file)
-	myLength = length
+	local rate, startTime = World.OpenVisualInput(file)
+	myStartTime = startTime
 	World.SeekVisual(0)
 	if job.capture == 1 then
 		Agent.SendMessage("SetClock", myCamera, 0)
-		Agent.SendMessage("HarnessCapture", myCamera, job.capture_dir, job.capture_fps, 0)
+		-- Messages must get every declared argument, or Munki silently rejects them.
+		local ok = Agent.SendMessage("HarnessCapture", myCamera, job.capture_dir, job.capture_fps, 0, "hex")
+		HLog("camera " .. tostring(myCamera) .. " capture -> " .. tostring(ok))
 	end
 	World.CloseAccess()
 	if rate == false then
-		HLog("incompatible replay file (version " .. tostring(length) .. ")")
+		HLog("incompatible replay file (version " .. tostring(startTime) .. ")")
 		Done("bad_file")
 		return
 	end
-	HLog("opened " .. job.replay .. ": rate " .. tostring(rate) .. ", length " .. tostring(length))
-	Agent.SetTimer("Update", Agent.Me(), "readvis", 0.02)
+	HLog("opened " .. job.replay .. ": rate " .. tostring(rate) .. ", starts at " .. tostring(startTime))
+	-- Timers must be longer than max_tick_size (0.0625 in the player profile).
+	Agent.SetTimer("Update", Agent.Me(), "readvis", job.read_interval)
 end
 
 function CreateLights()
@@ -91,7 +96,7 @@ function Done(status)
 		World.CloseAccess()
 	end
 	HLog("done: " .. status .. ", frames " .. tostring(frames))
-	System.WriteTable(myJob.out, { status = status, length = myLength, last_time = myLastTime,
+	System.WriteTable(myJob.out, { status = status, start_time = myStartTime, last_time = myLastTime,
 		frames = frames, real_time = System.RealTime() - myStartReal })
 	if myWorld ~= nil then
 		Segment.Destroy(Segment.ambient)

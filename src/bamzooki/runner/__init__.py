@@ -29,10 +29,32 @@ from .contests import CONTEST_PATCHES, DEFAULT_OVERRIDES, ContestInfo, Verdict, 
 LUA_DIR = Path(__file__).with_name("lua")
 BOOT_NAME = "aiharness"
 VIDEO_CFG = "aiharness.vcfg"
-CLASSES = ["HarnessCamera", "AIHarnessDriver"]
+CLASSES = ["AIHarnessDriver"]  # governor classes, defined at runtime by boot.lua
+# World-agent classes must exist as files under Agents/World (runtime classes are invisible
+# inside worlds), so prepare() encrypts these into the sandbox.
+WORLD_CLASSES = ["HarnessCamera"]
+# Client area of the engine's default 900x700 window (the camera re-fits to the real area anyway).
+DEFAULT_CLIENT = (884, 662)
 
-# Default single-camera view: follow both Zooks (the game's "camera 2" framing).
-FOLLOW_BOTH = {"zook": 0, "offset": table.Vec(16, 16, 60), "angle": 45}
+
+
+# Views for camera="single" (and replay rendering). zook: -1 fixed target, 0 both Zooks,
+# 1 green, 5 red (the engine's visual groups). offset = camera position relative to the target.
+VIEWS = {
+    # Both Zooks, pulled back with a wide minimum angle so the arena stays readable.
+    "follow": {"zook": 0, "target": table.Vec(0, 0, 0), "offset": table.Vec(18, 20, 65), "angle": 45,
+               "min_angle": 30},
+    # The game's main overview camera ("camera1": whole arena from high up).
+    "overview": {"zook": -1, "target": table.Vec(0, 0, 0), "offset": table.Vec(-200, 120, 200), "angle": 18,
+                 "min_angle": 10},
+    # Chase cams (the game's small views 3 and 4).
+    "green": {"zook": 1, "target": table.Vec(0, 0, 0), "offset": table.Vec(5, 14, 40), "angle": 45, "min_angle": 10},
+    "red": {"zook": 5, "target": table.Vec(0, 0, 0), "offset": table.Vec(5, 14, 40), "angle": 45, "min_angle": 10},
+}
+
+
+def view_spec(view: str | dict) -> dict:
+    return dict(VIEWS[view]) if isinstance(view, str) else dict(view)
 
 
 @dataclass
@@ -51,8 +73,9 @@ class Job:
     video: bool = False  # capture frames and encode an MP4 (implies camera="single")
     video_fps: float = 25.0
     camera: str = "split"  # "split" = the game's 5-view layout, "single" = one follow camera
-    view: dict = field(default_factory=lambda: dict(FOLLOW_BOTH))  # for camera="single"
-    window: tuple[int, int] = (1024, 768)
+    view: str | dict = "follow"  # for camera="single": a VIEWS name or a view dict
+    window: tuple[int, int] | None = None  # client size; None = engine default (~884x662). Capture cost scales with pixels
+    position: str = "none"  # move the window: right / left / center / none (stay where it opens)
     config: dict = field(default_factory=dict)  # extra Config.Set values
     track_interval: float = 0.5
 
@@ -95,17 +118,26 @@ class Engine:
         if not (self.root / ENGINE_EXE).is_file():
             self.root.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(self.install.root, self.root, dirs_exist_ok=True)
-        boot = self.root / "Scripts" / "Boot" / f"{BOOT_NAME}.ssx"
-        src = (LUA_DIR / "loader.lua").read_bytes()
-        stamp = boot.with_suffix(".src")
-        if not boot.exists() or not stamp.exists() or stamp.read_bytes() != src:
-            boot.write_bytes(script.encode(src, self.install.script_key.public_key()))
+        self._install_script(LUA_DIR / "loader.lua", self.root / "Scripts" / "Boot" / f"{BOOT_NAME}.ssx")
+        for name in WORLD_CLASSES:
+            self._install_script(LUA_DIR / f"{name}.munki.lua", self.root / "Agents" / "World" / name / f"{name}.sax")
+
+    def _install_script(self, src_path: Path, dst: Path) -> None:
+        """Encrypt our Lua into the sandbox (only when it changed)."""
+        src = src_path.read_bytes()
+        stamp = dst.with_suffix(".src")
+        if not dst.exists() or not stamp.exists() or stamp.read_bytes() != src:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(script.encode(src, self.install.script_key.public_key()))
             stamp.write_bytes(src)
 
-    def write_video_cfg(self, size: tuple[int, int]) -> None:
+    def write_video_cfg(self, size: tuple[int, int] | None) -> None:
+        # Windowed mode ignores the size here (the runner resizes the window itself when asked);
+        # the file mainly keeps the engine out of the user's fullscreen Video.cfg.
         if not self.install.save_dir:
             return
-        cfg = {"bit_depth": 1, "quality": 1, "resolution": 0, "resolution_x": size[0],
+        size = size or DEFAULT_CLIENT
+        cfg = {"bit_depth": 1, "quality": 1, "resolution_x": size[0],
                "resolution_y": size[1], "shadow_quality": 1, "windowed": 1}
         (self.install.save_dir / VIDEO_CFG).write_text(table.dumps(cfg), encoding="latin-1")
 
@@ -140,13 +172,14 @@ class Engine:
             "track_interval": job.track_interval,
             "camera": 3 if single else 1,
             "camera_def": job.contest.camera_def,
-            "view": job.view,
-            "window_w": job.window[0],
-            "window_h": job.window[1],
+            "view": view_spec(job.view),
+            "window_w": (job.window or DEFAULT_CLIENT)[0],
+            "window_h": (job.window or DEFAULT_CLIENT)[1],
             "capture": 1 if job.video else 0,
             "capture_dir": _posix(frames_dir),
             "capture_fps": job.video_fps,
             "capture_start": max(0.0, job.go_time - 1.0),
+            "capture_ext": "hex",
             "overrides": job.overrides or None,
             "patches": (job.patches if job.patches is not None
                         else CONTEST_PATCHES.get(job.contest.contest_file)) or None,
@@ -165,7 +198,7 @@ class Engine:
                 "-script", _posix(LUA_DIR / "boot.lua"), "-job", _posix(run_dir / "job.dat")]
         if timeout is None:
             timeout = 60 + 2.0 * (job.go_time + job.duration)
-        status, error, wall = self._launch(args, timeout, focus)
+        status, error, wall = self._launch(args, timeout, focus, job.window, job.position)
         raw: dict = {}
         if out.exists():
             raw = table.loads(out.read_text("latin-1"))
@@ -192,12 +225,14 @@ class Engine:
             replay=replay if replay and replay.exists() else None, video=video, error=error, raw=raw)
 
     # --- replays -------------------------------------------------------------------
-    def render_replay(self, replay: Path, video: bool = True, fps: float = 25.0, speed: float = 0.5,
-                      view: dict | None = None, window: tuple[int, int] = (1024, 768),
+    def render_replay(self, replay: Path, video: bool = True, fps: float = 25.0, speed: float = 2.0,
+                      view: str | dict | None = None, window: tuple[int, int] | None = None,
+                      position: str = "none",
                       timeout: float | None = None, focus: str = "idle") -> dict:
         """Play a .bvz/.bmv through our camera; with video=True also capture frames and encode
-        replay.mp4 next to the run's other files. speed < 1 plays slower than real time so the
-        engine can render every frame. Returns the player's result table plus 'video'/'run_dir'."""
+        replay.mp4 next to the run's other files. Playback is frame-stepped: every update (0.07 s)
+        advances speed x 0.02 s of replay time (speed 2 = one 25 fps frame per update, about
+        0.6x real time). Returns the player's result table plus "video" and "run_dir"."""
         self.prepare()
         self.write_video_cfg(window)
         replay = Path(replay).resolve()
@@ -206,9 +241,10 @@ class Engine:
         frames_dir.mkdir(parents=True, exist_ok=True)
         spec = {
             "profile": "player", "driver": "HarnessPlayer",
-            "classes": {1: "HarnessCamera", 2: "HarnessPlayer"}, "camera": 3,
-            "replay": _posix(replay), "tmp_bmv": _posix(run_dir / "replay_tmp.bmv"), "speed": speed,
-            "view": view or dict(FOLLOW_BOTH), "window_w": window[0], "window_h": window[1],
+            "classes": {1: "HarnessPlayer"}, "camera": 3,
+            "replay": _posix(replay), "tmp_bmv": _posix(run_dir / "replay_tmp.bmv"), "speed": speed, "read_interval": 0.07,
+            "view": view_spec(view or "follow"), "window_w": (window or DEFAULT_CLIENT)[0],
+            "window_h": (window or DEFAULT_CLIENT)[1],
             "capture": 1 if video else 0, "capture_dir": _posix(frames_dir), "capture_fps": fps,
             "window_title": f"BAMZOOKi harness - replay {replay.stem}",
             "out": _posix(run_dir / "result.dat"), "log": _posix(run_dir / "player_log.txt"),
@@ -217,7 +253,7 @@ class Engine:
         (run_dir / "job.dat").write_text(table.dumps(spec), encoding="latin-1")
         args = ["-init", BOOT_NAME, "-videocfg", VIDEO_CFG,
                 "-script", _posix(LUA_DIR / "boot.lua"), "-job", _posix(run_dir / "job.dat")]
-        status, error, wall = self._launch(args, timeout or 600, focus)
+        status, error, wall = self._launch(args, timeout or 600, focus, window, position)
         out = run_dir / "result.dat"
         res = table.loads(out.read_text("latin-1")) if out.exists() else {"status": status}
         res.update(run_dir=run_dir, wall_time=wall, error=error, video=None)
@@ -229,7 +265,7 @@ class Engine:
     def play_replay(self, replay: Path, wait: bool = False) -> subprocess.Popen:
         """Open a .bvz in the game's own Motion Player (interactive UI: pause, seek, replay)."""
         self.prepare()
-        self.write_video_cfg((1024, 768))
+        self.write_video_cfg((960, 540))
         cmd = self.install.config.wine_command + [str(self.root / ENGINE_EXE), "-init", "contestfileplayer",
                                                   "-videocfg", VIDEO_CFG, "-f", str(Path(replay).resolve())]
         proc = subprocess.Popen(cmd, cwd=self.root, stdin=subprocess.DEVNULL,
@@ -238,7 +274,9 @@ class Engine:
             proc.wait()
         return proc
 
-    def _launch(self, args: list[str], timeout: float, focus: str) -> tuple[str, str | None, float]:
+    def _launch(self, args: list[str], timeout: float, focus: str,
+                size: tuple[int, int] | None = None,
+                position: str = "none") -> tuple[str, str | None, float]:
         log = Path(os.environ.get("APPDATA", "")) / "BonsaiErrorLog.txt"
         log_mtime = log.stat().st_mtime if log.exists() else None
         cmd = self.install.config.wine_command + [str(self.root / ENGINE_EXE)] + args
@@ -251,8 +289,16 @@ class Engine:
 
         def watch():
             focused_once = False
+            sized = size is None and position == "none"  # default: leave the window as it opens
             while not stop.is_set() and proc.poll() is None:
                 wins = _win.windows_of(proc.pid)
+                if not sized:
+                    # The engine ignores the .vcfg size in windowed mode; set the client area
+                    # once our boot script has titled the window (SimpleFrame exists by then).
+                    for hwnd, title in wins:
+                        if title.startswith("BAMZOOKi harness"):
+                            _win.place_window(hwnd, *(size or _win.client_size(hwnd)), position)
+                            sized = True
                 for hwnd, title in wins:
                     if "Error" in title:
                         state["error_window"] = title

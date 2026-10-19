@@ -68,13 +68,35 @@ def test_job_values_serialise():
                                                "classes": {1: "AIHarnessDriver"}}
 
 
-def test_fill_gaps(tmp_path):
-    from bamzooki.runner.video import fill_gaps
+def test_frame_sequence_repeats_across_gaps(tmp_path):
+    from bamzooki.runner.video import frame_files, sequence
 
-    for k, data in [(3, b"a"), (4, b"b"), (7, b"c")]:
-        (tmp_path / f"frame_{k:06d}.jpg").write_bytes(data)
-    assert fill_gaps(tmp_path) == 5
-    assert [(tmp_path / f"frame_{k:06d}.jpg").read_bytes() for k in range(3, 8)] == [b"a", b"b", b"b", b"b", b"c"]
+    for k in (3, 4, 7):
+        (tmp_path / f"frame_{k:06d}.hex").write_text("x")
+    seq = sequence(frame_files(tmp_path))
+    assert [p.name for p in seq] == ["frame_000003.hex"] + ["frame_000004.hex"] * 3 + ["frame_000007.hex"]
+
+
+def test_decode_hex_frame():
+    from bamzooki.runner.video import VideoError, decode_hex_frame
+
+    w, h, rgb = decode_hex_frame("08080800" + "0002" + "0001" + "ff0000" + "00ff00" + "00")
+    assert (w, h, rgb) == (2, 1, b"\xff\x00\x00\x00\xff\x00")
+    with pytest.raises(VideoError):
+        decode_hex_frame("08080800" + "0002" + "0002" + "ff")
+
+
+def test_frames_to_mp4(tmp_path):
+    import shutil
+
+    from bamzooki.runner.video import frames_to_mp4
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    for k, colour in [(0, "ff0000"), (1, "00ff00"), (3, "0000ff")]:
+        (tmp_path / f"frame_{k:06d}.hex").write_text("08080800" + "0010" + "0010" + colour * 256)
+    out = frames_to_mp4(tmp_path, tmp_path / "t.mp4", fps=25)
+    assert out.stat().st_size > 0 and not list(tmp_path.glob("*.hex"))
 
 
 @pytest.mark.install

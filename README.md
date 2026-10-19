@@ -52,8 +52,36 @@ standard Program Files locations (or the default Wine prefix) are searched.
 ```sh
 python tools/extract.py      # decrypt all scripts and decode example Zooks into the cache
 python -m pytest             # install-backed tests skip automatically if no install is found
+python -m pytest -m engine   # opt-in tests that launch the game on screen
 python tools/check_assets.py # run the asset guard by hand
+
+python tools/run_contest.py --list                                   # contests in your install
+python tools/run_contest.py "Zook Sumo" --green Ant --red Spider     # watch a contest, get a verdict
+python tools/run_contest.py "Zook Sumo" --green Ant --red Spider --record --video   # + .bvz + MP4
+
+python tools/replay.py play   .cache/bamzooki/runs/<run>     # watch a .bvz in the game's Motion Player
+python tools/replay.py render .cache/bamzooki/runs/<run> --view overview   # re-render a replay to MP4
 ```
+
+Views for `--video` / `--camera single` / `replay.py render`: `follow` (both Zooks, default),
+`overview` (whole arena), `green`, `red` (chase cams). Without `--video` the contest shows the
+game's own 5-view layout. Capturing frames slows the engine in proportion to the window's
+pixel count (the default ~884×662 window runs at about 0.85× real time with capture), so keep
+the window small when recording; `--window WxH` and `--position right|left|center` exist
+but are off by default. MP4 export needs `ffmpeg` on PATH.
+
+```python
+from bamzooki.runner import run_contest
+r = run_contest("Zook Sumo", green="a.zook", red="b.zook", seed=1, record=True, video=True)
+print(r.winner, r.scores, r.finish_time, r.replay, r.video)
+```
+
+The game runs **on screen**: its main loop only advances while its window has focus. The
+runner focuses the window when it launches, and takes focus back once you've been idle for
+3 seconds (`focus="idle"`; `"launch"` and `"always"` are also available). Results are
+deterministic for a given `seed`. Each run's files (job, logs, result table, replay, frames,
+MP4) go to `.cache/bamzooki/runs/<timestamp>-<contest>/`. The engine runs from a copy of
+your install under `.cache/bamzooki/sandbox/`; your install is never modified.
 
 ## Layout
 

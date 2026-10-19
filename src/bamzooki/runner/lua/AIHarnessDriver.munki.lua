@@ -123,12 +123,15 @@ function Setup()
 	World.OpenAccess(myWorld)
 	if myJob.camera == 3 then
 		myHarnessCamera = Agent.Create("HarnessCamera", 0, 0, myJob.window_w, myJob.window_h)
+		HLog("camera fitted to width " .. tostring(Agent.SendMessage("FitWindow", myHarnessCamera)))
 		local v = myJob.view
-		Agent.SendMessage("SetView", myHarnessCamera, { zook = v.zook, target = Vector.New(0, 0, 0),
+		Agent.SendMessage("SetMinAngle", myHarnessCamera, v.min_angle)
+		Agent.SendMessage("SetView", myHarnessCamera, { zook = v.zook, target = v.target,
 			offset = v.offset, verticalViewAngle = v.angle, targetHeight = 0 })
 		if myJob.capture == 1 then
-			Agent.SendMessage("HarnessCapture", myHarnessCamera, myJob.capture_dir, myJob.capture_fps,
-				myJob.capture_start)
+			local ok = Agent.SendMessage("HarnessCapture", myHarnessCamera, myJob.capture_dir, myJob.capture_fps,
+				myJob.capture_start, myJob.capture_ext)
+			HLog("camera " .. tostring(myHarnessCamera) .. " capture -> " .. tostring(ok))
 		end
 	end
 	if myJob.camera == 2 then

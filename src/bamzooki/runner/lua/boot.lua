@@ -69,6 +69,9 @@ if JOB.config ~= nil then
 end
 
 -- Agent classes shipped next to this file.
+-- Governor-agent classes are defined at runtime. (World-agent classes such as HarnessCamera
+-- cannot be: runtime classes are invisible inside worlds, so the runner installs those into
+-- the sandbox's Agents/World as encrypted .sax files instead.)
 for i, name in JOB.classes do
 	local src = String.ReadFile(SCRIPT_DIR .. "/" .. name .. ".munki.lua")
 	if JOB.camera ~= 1 and JOB.camera ~= 3 then

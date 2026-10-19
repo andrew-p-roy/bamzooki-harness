@@ -138,10 +138,10 @@ def judge(raw: dict, players: int) -> Verdict:
         for i, s in finish["score"].items():
             cid = (finish.get("contestant") or {}).get(i)
             scores[colour_of.get(cid, f"contestant{cid}")] = s
-    elif finish:
-        decided_by = "finish"
-        notes.append("finish reported without a scoreboard")
     else:
+        if finish:
+            # e.g. China Shop: a timer ends the contest; the result is in earlier "score" reports.
+            notes.append("finish reported without a scoreboard; using the latest score reports")
         for r in reports:
             if r.get("name") == "score" and r.get("score"):
                 decided_by = "score"
