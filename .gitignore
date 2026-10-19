@@ -1,0 +1,41 @@
+# --- Local configuration (machine-specific paths) ---
+/bamzooki.toml
+
+# --- Extraction cache / install sandbox (decrypted scripts, decoded Zooks, keys-derived data) ---
+/.cache/
+
+# --- Game files and BBC material: never commit (bring your own copy) ---
+*.ssx
+*.sax
+*.skx
+*.zook
+*.dff
+*.bmi
+*.bmv
+*.bvz
+*.sdx
+*.contest
+/Documentation/*.pdf
+# local scratch folders with game data / decoded material
+/Zook Examples/
+/Examples Zooks/
+# legacy scratch script that hard-codes the Zook password
+/zook.py
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
