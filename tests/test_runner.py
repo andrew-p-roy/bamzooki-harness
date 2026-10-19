@@ -157,3 +157,46 @@ def test_trials_table():
 
     assert TRIALS["sprint"] == ("SprintEnv", 20.0) and set(TRIALS) == {"sprint", "hurdles", "lap", "block_push",
                                                                        "high_jump"}
+
+
+def test_manual_text_cleanup():
+    from bamzooki.manual import clean
+
+    # headings repeat each letter three times; some paragraphs are emitted twice
+    text = "MMMaaakkkiiinnnggg   yyyooouuurrr\nSome text\n\nSame para\n\nSame para\n\nEnd"
+    assert clean(text) == "Making your Some text\n\nSame para\n\nEnd"
+
+
+def test_arena_prunes_old_images():
+    from bamzooki.arena import _prune_images
+
+    img = lambda: {"role": "user", "content": [{"type": "text", "text": "x"}, {"type": "image_url", "image_url": {"url": "d"}}]}
+    msgs = [img(), {"role": "assistant", "content": "a"}, img(), img()]
+    _prune_images(msgs, keep=2)
+    assert "omitted" in msgs[0]["content"][0]["text"] and msgs[2]["content"][1]["type"] == "image_url"
+
+
+def test_guard_blocks_pdfs(tmp_path):
+    from bamzooki.guard import check_files
+
+    (tmp_path / "manual.pdf").write_bytes(b"%PDF")
+    assert check_files([tmp_path / "manual.pdf"])
+
+
+def test_stalled_runs_are_not_game_timeouts():
+    from bamzooki.runner import _stalled, _wall_limit
+    from bamzooki.studio import PLAYED
+
+    assert _wall_limit(124) == 492 and "stalled" not in PLAYED and "engine_error" not in PLAYED
+    assert "does not count" in _stalled(492, None) and _stalled(492, "x").endswith("\nx")
+
+
+def test_arena_sees_a_submission():
+    import json
+
+    from bamzooki.arena import Arena, Entrant
+
+    a = Arena.__new__(Arena)
+    a.entrant = Entrant("some/model", False)
+    a._summarise("submit_design", json.dumps({"design": "x/Bot@1", "outcome": "draw", "score": 0.5}))
+    assert a.entrant.submitted
