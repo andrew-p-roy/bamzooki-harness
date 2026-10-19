@@ -17,7 +17,8 @@ from pathlib import Path
 from .codec.archive import MAGIC
 
 FORBIDDEN_EXTENSIONS = frozenset(
-    {".ssx", ".sax", ".skx", ".zook", ".dff", ".bmi", ".bmv", ".bvz", ".sdx", ".contest"}
+    {".ssx", ".sax", ".skx", ".zook", ".dff", ".bmi", ".bmv", ".bvz", ".sdx", ".contest",
+     ".pdf"}  # .pdf: the game manual is BBC material
 )
 
 

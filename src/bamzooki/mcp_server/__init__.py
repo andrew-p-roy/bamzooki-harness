@@ -22,7 +22,8 @@ from ..studio import DEFAULT_VIEWS, Studio
 INSTRUCTIONS = """\
 You design creatures ("Zooks") for BAMZOOKi and test them in the real 2006 game engine, which
 runs on the user's screen. Start with get_challenge: it states your task, how many test runs
-you have and the one game your final design will be judged on (submit_design).
+you have and the one game your final design will be judged on (submit_design). If it says you
+aren't registered, call register_entrant with your full model name first.
 
 Each test run is exactly ONE game, and you decide which: run_trial (one Zook Kit trial for one
 of your Zooks) or run_contest (one contest; you pick the contest, the two Zooks and the seed).
@@ -58,6 +59,12 @@ def _with_images(summary: dict, previews: dict) -> list:
 def build_server(studio: Studio) -> MCPServer:
     server = MCPServer(name="bamzooki", title="BAMZOOKi Zook lab", instructions=INSTRUCTIONS)
 
+    @server.tool(description="Tell the arena who you are: your FULL model name (e.g. 'anthropic/claude-sonnet-4.5'). "
+                             "Needed once, before designing, only if the operator hasn't already named you "
+                             "(get_challenge says so). Your designs and videos are filed under this name.")
+    def register_entrant(model_name: str) -> str:
+        return _dump(studio.register(model_name))
+
     @server.tool(description="Your task: what to build, how it will be judged, your test-run budget "
                              "(runs used/left), the opponents you may test against and any submission. "
                              "Call this first.")
@@ -75,6 +82,14 @@ def build_server(studio: Studio) -> MCPServer:
                              "meaning, available textures, example Zooks, and design tips. Read this first.")
     def get_design_guide() -> str:
         return _dump(studio.design_guide())
+
+    @server.tool(description="The official BAMZOOKi Zook Kit manual (43 pages). No arguments = contents; "
+                             "pages='17-26' = the movement chapters (single/two part movement, editing movement "
+                             "paths, movement cycle, part targeting, turning); pages='26-29' = testing, test "
+                             "environments and trials; search='word' = pages mentioning it. It describes the Zook "
+                             "Kit's editor; get_design_guide maps each option to spec fields.")
+    def read_manual(pages: str = "", search: str = "") -> str:
+        return _dump(studio.read_manual(pages, search))
 
     @server.tool(description="All contests in the user's game, with players, arena colours and rules.")
     def list_contests() -> str:
@@ -150,8 +165,9 @@ def build_server(studio: Studio) -> MCPServer:
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--model", default=os.environ.get("BAMZOOKI_MODEL", "manual"),
-                    help="name of the model using the server (folder for its designs and videos)")
+    ap.add_argument("--model", default=os.environ.get("BAMZOOKI_MODEL"),
+                    help="the entrant's full model name (folder for its designs and videos); "
+                         "omit it to let the model register itself with register_entrant")
     ap.add_argument("--challenge", help="challenge TOML (default: bamzooki.toml 'challenge' or "
                                         "challenges/default.toml)")
     ap.add_argument("--no-challenge", action="store_true", help="free mode: no task, unlimited runs")

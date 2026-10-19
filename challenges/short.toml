@@ -18,7 +18,8 @@ Choosing which games to play, against whom, is your testing strategy. Saving and
 designs is free and doesn't use runs.
 
 When you're done, call submit_design once with your best design. It plays the single
-evaluation game below (it doesn't use a test run): a win scores 1, a draw 0.5, a loss 0.
+evaluation game below (it doesn't use a test run): a win scores 1, a draw 0.5, a loss 0. The
+evaluation seed is secret, so make sure your design wins robustly, not just on one seed.
 """
 
 [budget]
@@ -33,5 +34,6 @@ draw = 0.5                               # a game with no winner (e.g. time limi
 [evaluation]
 contest = "Zook Sumo"
 opponent = "Spider"
-seed = 1
+seed = 7
 side = "green"
+reveal_seed = false                      # models know the game but not its seed (can't rehearse it)

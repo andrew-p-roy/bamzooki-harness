@@ -22,6 +22,7 @@
 *.sdx
 *.contest
 /Documentation/*.pdf
+/Model Instructions/*.pdf
 # local scratch folders with game data / decoded material
 /Zook Examples/
 /Examples Zooks/
@@ -45,3 +46,4 @@ dist/
 .idea/
 Thumbs.db
 .DS_Store
+.env

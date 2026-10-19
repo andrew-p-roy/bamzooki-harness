@@ -35,6 +35,18 @@ class ZookRef:
         return f"{self.owner}/{self.name}@{self.version}"
 
 
+_ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def entrant_folder(model: str) -> str:
+    """Folder name for an entrant: the full model name (e.g. "anthropic/claude-sonnet-4.5" ->
+    "anthropic_claude-sonnet-4.5"); only characters illegal in file names are replaced."""
+    name = _ILLEGAL.sub("_", model.strip()).strip(" .")
+    if not name or len(name) > 120 or name in ("examples",):
+        raise ValueError(f"model name {model!r}: 1-120 characters, not 'examples'")
+    return name
+
+
 def safe_name(name: str, what: str = "name") -> str:
     name = name.strip()
     if not name or len(name) > MAX_NAME or not re.fullmatch(r"[A-Za-z0-9 _\-.]+", name) or name.startswith("."):
@@ -94,7 +106,7 @@ class Zoo:
         return ZookRef(owner, name, v, d / f"{v}.0.zook", d / f"{v}.0.json")
 
     def new_version(self, model: str, name: str) -> tuple[int, Path]:
-        safe_name(model, "model")
+        entrant_folder(model)
         safe_name(name)
         d = self.root / model / name
         d.mkdir(parents=True, exist_ok=True)

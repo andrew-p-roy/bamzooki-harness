@@ -17,14 +17,22 @@
 # Relative paths are resolved against the repo root. Must stay gitignored.
 # cache_dir = ".cache/bamzooki"
 
-# Where MP4 renders go, one folder per model: <render_dir>/<model>/<timestamp>_<contest>_....mp4
-# Relative paths are resolved against the repo root. Gitignored by default ("renders/").   BAMZOOKI_RENDER_DIR
-# render_dir = "renders"
+# The arena folder: everything models produce, kept outside the repo.     BAMZOOKI_ARENA_DIR
+#   <arena_dir>/Zook Entries/<full model name>/   designs, challenge progress, results log
+#   <arena_dir>/Renders/<full model name>/        contest/trial videos and stills
+#   <arena_dir>/Transcripts/<full model name>/    arena runner conversations
+# arena_dir = "~/BAMZOOKi Arena"
+# render_dir / zoo_dir override the Renders / Zook Entries folders individually.
 
-# Where models' Zook designs are kept: <zoo_dir>/<model>/<Name>/<n>.0.zook (+ .json spec, previews).
-# Gitignored by default ("zooks/").                                     BAMZOOKI_ZOO_DIR
-# zoo_dir = "zooks"
 
 # The challenge given to models through the MCP server: task text, test-run budget (default 20)
 # and the final evaluation. See challenges/default.toml.            BAMZOOKI_CHALLENGE
 # challenge = "challenges/default.toml"
+
+# tools/arena.py: OpenRouter models take the challenge in turn (needs OPENROUTER_API_KEY in .env).
+# [arena]
+# challengers = ["anthropic/claude-sonnet-4.5", "openai/gpt-5", "google/gemini-2.5-pro"]
+# challenge = "challenges/short.toml"
+# max_turns = 120          # model turns per challenger before the runner stops it
+# max_tokens = 4000        # per model reply
+# temperature = 0.7

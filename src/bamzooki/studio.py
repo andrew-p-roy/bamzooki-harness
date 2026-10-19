@@ -16,33 +16,63 @@ import threading
 import time
 from pathlib import Path
 
+from . import manual
 from .challenge import Challenge, ChallengeState
+from .manual import MODEL_INSTRUCTIONS
 from .runner import TRIALS, Engine, Job, contests
 from .runner.contests import RULES
 from .sdk import schema
-from .sdk.store import Zoo, ZookRef, safe_name
+from .sdk.store import Zoo, ZookRef, entrant_folder, safe_name
 from .sdk.zook import SpecError, Zook, apply_edits, validate_spec
 
 DEFAULT_VIEWS = ("three_quarter", "front", "top")
 
-GUIDE_PATH = Path(__file__).with_name("docs") / "zook_design_guide.md"
+GUIDE_PATH = MODEL_INSTRUCTIONS / "Zook Design Guide.md"
 
 
 class Studio:
     """One model's workspace. The model only sees the example Zooks and its own designs; other
     models' designs are hidden and can't be referenced. With a challenge, test runs are budgeted."""
 
-    def __init__(self, model: str = "manual", engine: Engine | None = None, challenge: Challenge | None = None):
+    def __init__(self, model: str | None = "manual", engine: Engine | None = None,
+                 challenge: Challenge | None = None):
+        """model: the entrant's full model name (e.g. "anthropic/claude-sonnet-4.5"); its folder
+        is "Zook Entries/<name with / replaced>". None = the model registers itself first."""
         self.engine = engine or Engine()
         self.install = self.engine.install
-        self.model = safe_name(model, "model")
         self.engine.prepare()
         self.zoo = Zoo(self.install, examples_root=self.engine.root / "Teams" / "examples" / "Creatures")
         self.lock = threading.Lock()
         self.work = self.install.config.cache_dir / "studio"
         self.work.mkdir(parents=True, exist_ok=True)
         self.challenge = challenge
-        self.state = ChallengeState(challenge, self.zoo.root / self.model) if challenge else None
+        self.model: str | None = None  # folder name
+        self.model_name: str | None = None  # full model name as given
+        self.state: ChallengeState | None = None
+        if model:
+            self._set_model(model)
+
+    def _set_model(self, model: str) -> None:
+        self.model_name = model.strip()
+        self.model = entrant_folder(model)
+        self.state = ChallengeState(self.challenge, self.zoo.root / self.model) if self.challenge else None
+
+    def register(self, model_name: str) -> dict:
+        """Let a model name itself when the operator didn't (new names only, so an entrant can't
+        take over someone else's folder)."""
+        if self.model:
+            return {"entrant": self.model_name, "note": "Already registered for this session."}
+        folder = entrant_folder(model_name)
+        if (self.zoo.root / folder).exists():
+            return {"error": f"An entrant {model_name!r} already exists. Use your exact full model name; "
+                             "if this is you resuming, the operator must start the server with --model."}
+        self._set_model(model_name)
+        (self.zoo.root / folder).mkdir(parents=True, exist_ok=True)
+        return {"entrant": self.model_name, "folder": folder}
+
+    def _need_model(self) -> None:
+        if not self.model:
+            raise RuntimeError("Not registered yet: call register_entrant with your full model name first.")
 
     # --- reference data ------------------------------------------------------------
     def contests(self) -> list[dict]:
@@ -72,14 +102,21 @@ class Studio:
                 "free_play_environments": self.engine.environments(),
                 "edit_ops": "edit_zook takes [{op: set|add|remove, path: 'body.children[0].size.width', value}]"}
 
+    def read_manual(self, pages: str = "", search: str = "") -> dict:
+        return manual.read(pages, search)
+
     # --- zooks -----------------------------------------------------------------------
     def zooks(self) -> dict:
         """What this model can use: the example Zooks and its own designs (name -> versions)."""
+        self._need_model()
         return {"examples": self.zoo.example_names(), "mine": self.zoo.designs(self.model)}
 
     def _ref(self, ref: str) -> ZookRef:
         """Resolve a ref, allowing only example Zooks and this model's own designs."""
-        owner = ref.split("@", 1)[0].split("/", 1)[0] if "/" in ref else None
+        if "/" not in ref and not self.model:
+            return self.zoo.resolve(f"examples/{ref}")
+        self._need_model()
+        owner = ref.split("@", 1)[0].rsplit("/", 1)[0] if "/" in ref else None
         if owner not in (None, "examples", self.model):
             raise KeyError(f"{ref!r} is not available: use an example Zook or one of your own designs")
         return self.zoo.resolve(ref, self.model)
@@ -114,6 +151,7 @@ class Studio:
         return {"valid": not problems, "problems": problems, "warnings": self._texture_warnings(spec)}
 
     def save_zook(self, spec: dict, notes: str = "", views=DEFAULT_VIEWS) -> dict:
+        self._need_model()
         problems = validate_spec(spec)
         if problems:
             return {"saved": False, "problems": problems}
@@ -177,6 +215,7 @@ class Studio:
     # --- contests ----------------------------------------------------------------------
     def run(self, contest: str, green: str, red: str | None = None, seed: int = 1, video: bool = True,
             record: bool = False, duration: float = 90.0) -> dict:
+        self._need_model()
         info = contests.find(contest, self.install)
         g = self._ref(green)
         rd = self._ref(red) if red else None
@@ -236,6 +275,7 @@ class Studio:
     def trial(self, ref: str, trial: str = "sprint", duration: float = 20.0, video: bool = True) -> dict:
         """Run a Zook Kit trial (sprint, hurdles, lap, block_push, high_jump) or free play in an
         environment ("free:SlopeEnv") on its own. Quicker feedback than a contest."""
+        self._need_model()
         r = self._ref(ref)
         if self.state and (why := self.state.check("run_trial")):
             return {"error": why, "budget": self.state.budget()}
@@ -258,6 +298,9 @@ class Studio:
 
     # --- challenge -----------------------------------------------------------------------
     def challenge_info(self) -> dict:
+        if self.challenge and not self.model:
+            return {**self.challenge.describe(), "registered": False,
+                    "next_step": "Call register_entrant with your full model name (e.g. 'anthropic/claude-sonnet-4.5')."}
         if not self.challenge:
             return {"challenge": None, "note": "No challenge configured: test runs are unlimited."}
         return {**self.challenge.describe(), "budget": self.state.budget(),
@@ -269,6 +312,7 @@ class Studio:
         """Play the challenge's single evaluation game with this design (not counted against the budget)."""
         if not self.challenge:
             return {"error": "No challenge configured."}
+        self._need_model()
         if why := self.state.can_submit():
             return {"error": why}
         mine = self._ref(ref)
@@ -287,7 +331,7 @@ class Studio:
             r = self.engine.run(job, name=f"eval-{info.contest_file}")
         outcome = "win" if r.winner == g.side else ("draw" if r.winner is None else "loss")
         score = {"win": 1.0, "draw": self.challenge.draw_points, "loss": 0.0}[outcome]
-        entry = {"design": mine.label, "game": vars(g), "outcome": outcome, "score": score,
+        entry = {"design": mine.label, "game": {**g.public(), "seed": g.seed}, "outcome": outcome, "score": score,
                  "status": r.status, "winner": r.winner, "scores": r.scores,
                  "finish_after_go_s": None if r.finish_time is None else round(r.finish_time, 2),
                  "fell": r.verdict.fell if r.verdict else {},
@@ -304,6 +348,7 @@ class Studio:
         return entry
 
     def results(self, limit: int = 20) -> list[dict]:
+        self._need_model()
         log = self.zoo.root / self.model / "results.jsonl"
         if not log.exists():
             return []

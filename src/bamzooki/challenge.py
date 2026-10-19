@@ -16,6 +16,7 @@ A challenge is a TOML file (see challenges/default.toml):
     opponent = "Spider"              # an example Zook ("Spider") or a saved design ("model/Name@n")
     seed = 1
     side = "green"                   # the submitted Zook's arena colour: green or red
+    reveal_seed = false              # hide the seed so models can't rehearse the exact game
 
 Every run is a single game. Which games to play during testing (trial or contest, which
 contest, which of its Zooks against which opponent, which seed) is up to the model.
@@ -43,6 +44,12 @@ class Match:
     opponent: str
     seed: int = 1
     side: str = "green"  # green | red
+    reveal_seed: bool = True  # False: models are told the game but not its seed
+
+    def public(self) -> dict:
+        d = {"contest": self.contest, "opponent": self.opponent, "side": self.side}
+        d["seed"] = self.seed if self.reveal_seed else "secret (the same for every entrant)"
+        return d
 
 
 @dataclass
@@ -72,7 +79,8 @@ class Challenge:
         side = ev.get("side", "green")
         if side not in ("green", "red"):
             raise ValueError(f"{path}: evaluation side must be green or red")
-        match = Match(ev["contest"], ev["opponent"], int(ev.get("seed", 1)), side)
+        match = Match(ev["contest"], ev["opponent"], int(ev.get("seed", 1)), side,
+                      bool(ev.get("reveal_seed", True)))
         return cls(name=raw.get("name", path.stem), title=raw.get("title", path.stem),
                    description=raw.get("description", "").strip(), evaluation=match,
                    runs=int(budget.get("runs", 20)),
@@ -82,7 +90,7 @@ class Challenge:
 
     def describe(self) -> dict:
         return {"title": self.title, "description": self.description,
-                "evaluation_game": vars(self.evaluation),
+                "evaluation_game": self.evaluation.public(),
                 "scoring": {"win": 1, "draw": self.draw_points, "loss": 0},
                 "budget": {"runs": self.runs or "unlimited", "counted_tools": list(self.counts),
                            "each_run_is": "one game: a trial, or one contest between two Zooks you choose",

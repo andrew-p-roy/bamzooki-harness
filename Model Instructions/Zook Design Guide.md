@@ -3,8 +3,26 @@
 You are designing a creature (a "Zook") for BAMZOOKi, a 2006 game where creatures built in the
 Zook Kit compete in physics contests. Your design is loaded into the original game engine
 (Bonsai, with MathEngine Karma rigid-body physics). Everything here comes from the game's own
-code and from tests in this harness. Points marked *(inferred)* are reasoned from the code but
-not separately measured.
+code, the official Zook Kit manual and tests in this harness. Points marked *(inferred)* are
+reasoned from the code but not separately measured.
+
+The official manual is available too: `read_manual()` lists its contents, `read_manual(pages=
+"17-26")` covers movement, and `read_manual(search="...")` finds a topic. It describes the Zook
+Kit's editor (buttons, dragging IK points); here you set the same options in JSON:
+
+| Zook Kit (manual) | Spec field |
+|---|---|
+| Width / Height / Length, Pointiness, Flatten End, Flatten Side, Squareness | `size.*`, `shape.*` |
+| Position "Up/Down" and "Left/Right" (where a part sits on its parent) | `attach.elevation`, `attach.around` |
+| Twist, rotation "Up/Down" and "Left/Right" | `rotate.twist`, `rotate.up_down`, `rotate.left_right` |
+| Mirror | `"mirror": true` (+ `mirror_phase`) |
+| Movement Mode: No / Single part / Two part movement | `movement.type`: none / single / double |
+| IK points (the movement path) | `movement.ik_points` |
+| Movement Type: Auto / Left side / Right side / Always | `movement.side` |
+| Movement Cycle | `movement.phase` |
+| Part Targeting: Normal / Inverted / Off | `movement.targeting` |
+| Cycle Speed, Turn Sharpness, Turn Smoothness, Part Targeting Angle (root) | `gait.*` |
+| Colour, Brightness, Texture | `look.*` |
 
 You design the **body** and its **gait settings**. You don't write behaviour. The engine builds
 each Zook's controller from the body: which parts move, their stride paths and phases, how they
@@ -97,7 +115,11 @@ the cycle. Parts with the same phase move together; a difference of 0.5 is half 
 The part's angle follows a closed loop of **directions**, its stride path (`movement.ik_points`).
 Each point `[x, y, z]` is a direction in the part's own frame: z along the part (its rest
 direction), y up, x sideways (mirrored automatically for twins). Only the direction matters,
-not the length. The points are visited at equal time steps and the loop closes back to the first.
+not the length. The points are visited at equal time steps and the loop closes back to the first, so **more
+points along a stretch make the part move more slowly there** (the manual's tip: put several
+points along the ground-pushing stroke so it pushes smoothly, and only a few on the return swing;
+a sudden fast stroke can throw the Zook off the floor). Keep paths simple: many points make the
+Zook load slowly.
 - If you give no path, the game's default is used:
   `[[0,0,2.37],[-0.53,0,2.31],[0,0.6,2.3],[0.56,0,2.3]]`, which means rest, swing to one side,
   lift, swing to the other side (about ±13° of swing and 15° of lift).
@@ -115,23 +137,34 @@ and must not move by itself, and a parent can have only one double child. Here `
 **foot target offsets in the Zook's body frame** (x sideways, y up, z forward), in units,
 relative to where the foot (the shin's tip) rests. They are *not* mirrored for twins, so keep x ≈ 0
 for symmetric gaits. Default: `[[0,0,0],[0,0,0.5],[0,0.5,0],[0,0,-0.5]]` (rest → forward
-0.5 → lifted 0.5 → back 0.5). Larger z swings = longer strides; larger y = higher lift.
+0.5 → lifted 0.5 → back 0.5). Larger z swings = longer strides; larger y = higher lift. As the
+manual stresses, **the foot must go below the bottom of the Zook** during the pushing part of the
+path, or it never grips the floor (use negative y on the ground stroke). Points may lie beyond the
+leg's reach; a leg with a bigger knee bend can reach further.
 
 ### Steering (all contests steer you)
-Contests point each Zook at a target. To turn, the engine scales down, and can reverse, the
-strides of limbs on the inner side:
-- root `gait.turn_sharpness` (0–1): how strongly the inner side is slowed (high = can reverse
-  and spin on the spot).
-- root `gait.turn_smoothness` (0–1): over how wide an angle to the target the turning blends in.
-- `movement.side`: "Auto" (side taken from where the part attaches), "Left side"/"Right side"
-  (force), or "Always" (never modulated: always full stride, so it doesn't help turning).
-A Zook whose limbs are all on the centre line, or all "Always", can't steer.
+Zooks only ever move towards a target on the floor (manual). To turn, like you walking in a
+circle, the engine slows the strides of the limbs on the side it turns towards:
+- root `gait.turn_sharpness` (0–1): how much the inner side slows. In the engine the inner
+  side's stride is scaled by 1 − 2 × sharpness: 0 = no slowing (wide turns), 0.25 (default) =
+  half speed, 0.5 = stopped, 1 = **runs backwards** (spins on the spot; the manual notes this can
+  be an effective way to turn quickly).
+- root `gait.turn_smoothness` (0–1): low = slows the inner side quickly (snappy turns), high =
+  turns more gradually.
+- `movement.side`: "Auto" (works out which side the part is on), "Left side"/"Right side" (acts
+  as if on that side), or "Always" (same speed whichever way it turns). The manual's advice:
+  **Auto for parts that propel the Zook, Always for parts that don't** (antennae, tails,
+  self-righting parts).
+A Zook whose propelling limbs are all on the centre line, or all "Always", can't steer.
+- root `gait.cycle_speed`: the manual warns that maxing it won't make a Zook faster unless its
+  movement paths and balance are right.
 
-### Targeting (heads, necks, tails)
-`movement.targeting` "Normal" makes a part yaw **towards** the target, up to
-`targeting_angle` degrees; "Inverted" makes it yaw away. It works on non-moving parts too,
-e.g. a head or a front body segment that helps the Zook aim. (The root's
-`gait.targeting_angle` is the Zook Kit's master setting for the same angle.)
+### Targeting (spines, heads, antennae)
+`movement.targeting` turns a part relative to the target, up to `targeting_angle` degrees.
+Per the manual: **"Normal" moves the part away from the target, "Inverted" moves it towards
+the target**, and "Off" (default) does nothing. The manual suggests it for snakes and worms with
+a flexible spine (see the example Wormthing) and for eyes or antennae that point at the target.
+(The root's `gait.targeting_angle` is the Zook Kit's master setting for the same angle.)
 
 ### Body wave (worms, swimmers)
 `movement.wave` (0–1) makes a part's joint sway side to side once per cycle, timed by its
@@ -176,6 +209,13 @@ tool's arguments. Picking the games that teach you the most is part of the chall
 | `run_trial(ref, trial)` | one Zook Kit trial for one Zook | which Zook (`ref`), which trial: `sprint`, `hurdles`, `lap`, `block_push`, `high_jump`, or `free:<Env>` with a `duration` |
 | `run_contest(contest, green, red, seed)` | one contest between two Zooks | which contest, which Zook plays green and which plays red, and the `seed` |
 
+- **Trials** (as in the manual): sprint = run to the finish line; block_push = how far it pushes
+  blocks in a set time; hurdles = run to the finish over hurdles; high_jump = how high it jumps
+  while running at a target; lap = a lap of four targets. **Free-play environments**
+  (`free:<Env>`, you set `duration`): BoxEnv (flat, no obstacles), RamEnv (a huge gate to barge
+  through), StrongEnv (increasingly heavy barrels to push), ZigZagEnv (slalom), SlopeEnv
+  (increasingly steep slopes), SloppyEnv (see-saws), StepEnv (steps up to a summit), ShiftEnv
+  (balls and boxes to push), HurdleEnv (hurdles of increasing height), PlayEnv, SprintEnv.
 - **Opponents:** any example Zook (`Spider`, `Ant`, `Leapsa`, `Scrabber`, `Twigger`,
   `Wormthing`) or any of your own designs and versions (`MyZook`, `MyZook@2`). You can pit your
   new version against your previous one (`green="MyZook@4", red="MyZook@3"`) to check that a

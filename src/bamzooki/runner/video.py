@@ -30,7 +30,9 @@ def slug(text: str) -> str:
 def render_path(render_dir: Path, model: str, parts: list[str], when: datetime | None = None,
                 suffix: str = ".mp4") -> Path:
     """<render_dir>/<model>/<YYYY-MM-DD_HH-MM-SS>_<part>_<part>....mp4 (folder created)."""
-    folder = Path(render_dir) / slug(model)
+    from ..sdk.store import entrant_folder
+
+    folder = Path(render_dir) / entrant_folder(model)
     folder.mkdir(parents=True, exist_ok=True)
     stamp = (when or datetime.now()).strftime("%Y-%m-%d_%H-%M-%S")
     return folder / ("_".join([stamp] + [slug(p) for p in parts if p]) + suffix)

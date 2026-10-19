@@ -85,7 +85,8 @@ PARAMS: tuple[Param, ...] = (
     Param("movement", "phase", "leg_phase", 0.0, 0, 1, where="child",
           help="where in the stride cycle this part is (offset limbs by 0.5 to alternate)"),
     Param("movement", "targeting", "spine", "Off", choices=("Normal", "Inverted", "Off"), where="child",
-          help="part turns towards the target (Normal), away (Inverted) or not at all"),
+          help="Zook Kit 'Part Targeting': Normal moves the part away from the target, Inverted towards it "
+               "(per the manual); for flexible spines, eyes, antennae"),
     Param("movement", "targeting_angle", "max_spine_angle", 30.0, 0, 90, where="child",
           help="maximum targeting angle in degrees"),
     Param("movement", "target_angle", "min_spine_target_angle", 180.0, 0, 180, where="child",

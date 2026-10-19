@@ -32,8 +32,9 @@ def challenge(tmp_path):
 def test_default_challenge_loads():
     c = Challenge.load()
     assert c.runs == 20 and c.submissions == 1 and set(c.counts) == {"run_contest", "run_trial"}
-    assert (c.evaluation.contest, c.evaluation.opponent, c.evaluation.seed) == ("Zook Sumo", "Spider", 1)
-    assert c.describe()["evaluation_game"]["side"] == "green"
+    assert (c.evaluation.contest, c.evaluation.opponent, c.evaluation.seed) == ("Zook Sumo", "Spider", 7)
+    shown = c.describe()["evaluation_game"]
+    assert shown["side"] == "green" and "secret" in str(shown["seed"])  # models can't rehearse it
 
 
 def test_evaluation_is_one_game(challenge, tmp_path):
@@ -67,7 +68,7 @@ def _studio(tmp_path, model="me") -> Studio:
     (ex / "Ant").mkdir(parents=True)
     (ex / "Ant" / "2.1.zook").write_bytes(b"")
     s = Studio.__new__(Studio)
-    s.model = model
+    s.model = s.model_name = model
     s.zoo = Zoo(Install(root=tmp_path, config=Config(zoo_dir=tmp_path / "zoo")), examples_root=ex)
     s.challenge = s.state = None
     return s
@@ -84,3 +85,26 @@ def test_other_models_designs_are_hidden(tmp_path):
         s._ref("rival/Bot")
     with pytest.raises(KeyError):
         s._ref("rival/Bot@1")
+
+
+def test_entrant_names(tmp_path):
+    from bamzooki.sdk.store import entrant_folder
+
+    assert entrant_folder("anthropic/claude-sonnet-4.5") == "anthropic_claude-sonnet-4.5"
+    assert entrant_folder("claude-opus-5-5") == "claude-opus-5-5"
+    for bad in ("", "examples", "x" * 121):
+        with pytest.raises(ValueError):
+            entrant_folder(bad)
+
+
+def test_self_registration_only_for_new_names(tmp_path):
+    s = _studio(tmp_path, model=None)
+    s.challenge, s.state = None, None
+    _, p = s.zoo.new_version("taken_model", "Bot")
+    p.write_bytes(b"")
+    with pytest.raises(RuntimeError, match="register_entrant"):
+        s.zooks()
+    assert s._ref("Ant").owner == "examples"  # examples are readable before registering
+    assert "error" in s.register("taken/model")  # folder taken_model exists
+    assert s.register("openai/gpt-5") == {"entrant": "openai/gpt-5", "folder": "openai_gpt-5"}
+    assert s.zooks()["mine"] == {} and s.register("someone/else")["note"]
