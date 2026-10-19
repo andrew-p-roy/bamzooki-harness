@@ -13,8 +13,15 @@ prompt to talk to it. Commands:
     /next                 next challenger in the queue      /challenger <model>  a specific model
     /leaderboard          standings in this challenge       /status              current budget
     /open                 open the current entrant's latest video and stills
+    /contest              knockout tournament between this session's qualified Zooks (a model
+                          qualifies by WINNING its challenge game); the winner then makes a speech
     /list                 the queue                         /quit                leave
     anything else         a message to the current model (it may use its tools to answer)
+
+While a model is working you can still type: a message is handed to it after its current step
+(the tool call or game it's in), it takes it into account and carries on; /stop halts it there.
+--verbose streams its reasoning and notes as it writes them and shows them, and its tool
+arguments, in full (normally each reply is shown when complete, cut to 100 words).
 
 The API key comes from OPENROUTER_API_KEY (environment or the repo's .env file).
 """
@@ -24,14 +31,17 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import queue
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
 
+from . import tournament
 from .challenge import Challenge, ChallengeState
 from .config import REPO_ROOT, load_config
 from .manual import MODEL_INSTRUCTIONS
@@ -41,8 +51,11 @@ API = "https://openrouter.ai/api/v1"
 PROMPT_PATH = MODEL_INSTRUCTIONS / "Agent Prompt.md"
 KICKOFF = ("Begin the challenge now. Start with get_challenge. Work only through the bamzooki tools, and "
            "finish with submit_design followed by your presentation to the audience.")
+SHOW_WORDS = 100  # model text between tool calls is cut to this many words on screen (not in transcripts)
 NUDGE = ("You haven't submitted yet. Keep going with the bamzooki tools; when you're ready (or out of "
          "runs), call submit_design with your best design, then present your challenger.")
+INTERJECTION = ("[A message from the audience, sent while you were working. Take it into account (answer "
+                "briefly if it asks something), then carry on where you were.]\n\n{}")
 
 C = {"dim": "\033[2m", "b": "\033[1m", "g": "\033[32m", "y": "\033[33m", "c": "\033[36m", "m": "\033[35m",
      "r": "\033[31m", "x": "\033[0m"}
@@ -83,11 +96,16 @@ class OpenRouter:
             self._models = {m["id"]: m for m in r.json().get("data", [])}
         return self._models.get(model, {})
 
-    async def chat(self, model: str, messages: list[dict], tools: list[dict]) -> dict:
+    async def chat(self, model: str, messages: list[dict], tools: list[dict], on_delta=None) -> dict:
+        """One completion. With on_delta(kind, text) it is streamed: each piece of "reasoning" or
+        "content" goes to on_delta as it arrives, and the reply is put back together into the
+        same shape a non-streamed request returns."""
         body = {"model": model, "messages": messages, "tools": tools, "tool_choice": "auto",
                 "max_tokens": self.max_tokens, "usage": {"include": True}}
         if self.temperature is not None:
             body["temperature"] = self.temperature
+        if on_delta:
+            return await self._stream({**body, "stream": True}, on_delta)
         for attempt in range(5):
             r = await self.http.post("/chat/completions", json=body)
             if r.status_code in (429, 500, 502, 503, 504):
@@ -98,6 +116,92 @@ class OpenRouter:
                 raise RuntimeError(f"OpenRouter {r.status_code}: {json.dumps(data.get('error', data))[:500]}")
             return data
         raise RuntimeError("OpenRouter: too many retries")
+
+    async def _stream(self, body: dict, on_delta) -> dict:
+        for attempt in range(5):
+            async with self.http.stream("POST", "/chat/completions", json=body) as r:
+                if r.status_code in (429, 500, 502, 503, 504):
+                    await r.aread()
+                    await asyncio.sleep(2 * (attempt + 1))
+                    continue
+                if r.status_code != 200:
+                    raise RuntimeError(f"OpenRouter {r.status_code}: {(await r.aread()).decode(errors='replace')[:500]}")
+                return await _read_stream(r.aiter_lines(), on_delta)
+        raise RuntimeError("OpenRouter: too many retries")
+
+
+async def _read_stream(lines, on_delta) -> dict:
+    """Put a chat-completions event stream back together: text, reasoning, tool calls (sent in
+    fragments, keyed by index) and the usage chunk at the end."""
+    content, reasoning, calls, usage = [], [], {}, {}
+    async for line in lines:
+        if not line.startswith("data:"):
+            continue  # blank lines and ": OPENROUTER PROCESSING" keep-alives
+        data = line[5:].strip()
+        if data == "[DONE]":
+            break
+        chunk = json.loads(data)
+        if chunk.get("error"):
+            raise RuntimeError(f"OpenRouter (mid-stream): {json.dumps(chunk['error'])[:500]}")
+        usage = chunk.get("usage") or usage
+        for choice in chunk.get("choices") or []:
+            delta = choice.get("delta") or {}
+            for kind, parts in (("reasoning", reasoning), ("content", content)):
+                if delta.get(kind):
+                    parts.append(delta[kind])
+                    on_delta(kind, delta[kind])
+            for tc in delta.get("tool_calls") or []:
+                call = calls.setdefault(tc.get("index", len(calls)),
+                                        {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                call["id"] = tc.get("id") or call["id"]
+                fn = tc.get("function") or {}
+                call["function"]["name"] = call["function"]["name"] or fn.get("name") or ""
+                call["function"]["arguments"] += fn.get("arguments") or ""
+    msg = {"content": "".join(content), "reasoning": "".join(reasoning) or None,
+           "tool_calls": [calls[i] for i in sorted(calls)] or None}
+    return {"choices": [{"message": msg}], "usage": usage}
+
+
+# --- the keyboard ----------------------------------------------------------------------------
+
+class Keyboard:
+    """Reads stdin on its own thread for the whole session, so the audience can type while a
+    model works. Lines wait in a queue: the prompt takes them one at a time, a working model
+    gets them all after its current step (see Arena.converse)."""
+
+    def __init__(self):
+        self.lines: queue.Queue[str | None] = queue.Queue()  # None = end of input
+        self.busy = False  # a model is working: say a line is queued for it
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self) -> None:
+        while True:
+            try:
+                line = input()
+            except (EOFError, KeyboardInterrupt, OSError):
+                self.lines.put(None)
+                return
+            if self.busy and line.strip():
+                say("    (queued: the model gets it after its current step; /stop halts it)", "dim")
+            self.lines.put(line)
+
+    def get(self) -> str | None:
+        """The next line (blocking); None at end of input."""
+        return self.lines.get()
+
+    def drain(self) -> list[str]:
+        """Every line typed so far, without waiting (end of input is left for get())."""
+        out = []
+        while True:
+            try:
+                line = self.lines.get_nowait()
+            except queue.Empty:
+                return out
+            if line is None:
+                self.lines.put(None)
+                return out
+            if line.strip():
+                out.append(line.strip())
 
 
 # --- one challenger ------------------------------------------------------------------------
@@ -111,24 +215,29 @@ class Entrant:
     last_media: list[str] = field(default_factory=list)
     cost: float = 0.0
     tokens: int = 0
+    transcript: Path | None = None
+    design: str | None = None  # the submitted design ("folder/Name@n")
+    qualified: bool = False  # its challenge game was a win
 
 
 class Arena:
     def __init__(self, challenge: Challenge, queue: list[str], max_turns: int = 120, max_tokens: int = 4000,
-                 temperature: float | None = None, auto: bool = False):
+                 temperature: float | None = None, auto: bool = False, verbose: bool = False):
         self.cfg = load_config()
         self.challenge = challenge
         self.queue = list(queue)
         self.max_turns = max_turns
         self.auto = auto
+        self.verbose = verbose
+        self.keyboard: Keyboard | None = None  # started by repl()
         self.router = OpenRouter(load_api_key(), max_tokens, temperature)
         self.arena_dir = self.cfg.arena_dir
         self.arena_dir.mkdir(parents=True, exist_ok=True)
         self.entrant: Entrant | None = None
+        self.entrants: dict[str, Entrant] = {}  # everyone called this session, in order
         self.session = None
         self.tools: list[dict] = []
         self._stack = None
-        self._transcript: Path | None = None
 
     # --- MCP server per entrant ---
     async def _connect(self, model: str) -> None:
@@ -165,9 +274,9 @@ class Arena:
 
     # --- transcript ---
     def _log(self, kind: str, text: str) -> None:
-        if not self._transcript:
+        if not self.entrant or not self.entrant.transcript:
             return
-        with self._transcript.open("a", encoding="utf-8") as f:
+        with self.entrant.transcript.open("a", encoding="utf-8") as f:
             f.write(f"\n### {kind} ({time.strftime('%H:%M:%S')})\n\n{text}\n")
 
     # --- the agent loop ---
@@ -182,11 +291,14 @@ class Arena:
             return
         vision = "image" in ((info.get("architecture") or {}).get("input_modalities") or [])
         self.entrant = Entrant(model, vision)
+        self.entrants[model] = self.entrant
         folder = entrant_folder(model)
+        if win := self._winning_submission(folder):  # won in an earlier session: qualified, can't resubmit
+            self.entrant.submitted, self.entrant.qualified, self.entrant.design = True, True, win["design"]
         tdir = self.cfg.transcripts_dir / folder
         tdir.mkdir(parents=True, exist_ok=True)
-        self._transcript = tdir / f"{time.strftime('%Y-%m-%d_%H-%M-%S')}.md"
-        self._transcript.write_text(f"# {model} - {self.challenge.title}\n", encoding="utf-8")
+        self.entrant.transcript = tdir / f"{time.strftime('%Y-%m-%d_%H-%M-%S')}.md"
+        self.entrant.transcript.write_text(f"# {model} - {self.challenge.title}\n", encoding="utf-8")
         say(f"\n=== Challenger: {model} ===", "b")
         say(f"    vision: {'yes' if vision else 'no'}  |  challenge: {self.challenge.title}  |  "
             f"arena: {self.arena_dir}", "dim")
@@ -199,29 +311,73 @@ class Arena:
         await self.converse(nudges=3)
 
     async def converse(self, nudges: int = 0) -> None:
-        """Let the model work until it answers without calling tools."""
+        """Let the model work until it answers without calling tools. Lines the audience typed
+        meanwhile are handed over between steps; /stop ends the work there."""
         e = self.entrant
+        if self.keyboard:
+            self.keyboard.busy = True
+        try:
+            await self._work(e, nudges)
+        finally:
+            if self.keyboard:
+                self.keyboard.busy = False
+
+    def _interjections(self, e: Entrant) -> tuple[int, bool]:
+        """Pass on what the audience typed while the model worked: (messages passed, /stop typed)."""
+        passed, stop = 0, False
+        for line in self.keyboard.drain() if self.keyboard else []:
+            if line in ("/stop", "/quit", "/exit"):
+                stop = True
+            elif line.startswith("/"):
+                say(f"    ({line.split()[0]} waits until the model is done: type it again then, or /stop)", "y")
+            else:
+                e.messages.append({"role": "user", "content": INTERJECTION.format(line)})
+                self._log("audience (while working)", line)
+                say(f"    >> passed to {e.model}: {_clip(line, 20)}", "c")
+                passed += 1
+        return passed, stop
+
+    async def _work(self, e: Entrant, nudges: int) -> None:
         for _ in range(self.max_turns):
+            _, stop = self._interjections(e)
+            if stop:
+                say(f"[stopped: type to talk to {e.model}, or /next]", "y")
+                return
             _prune_images(e.messages, keep=2)
+            shown: list[str] = []  # kinds already streamed to the screen
             try:
-                data = await self.router.chat(e.model, e.messages, self.tools)
-            except RuntimeError as err:
-                say(f"[api error] {err}", "r")
+                if self.verbose:  # stream: reasoning and text appear as the model writes them
+                    data = await self.router.chat(e.model, e.messages, self.tools, on_delta=self._printer(e, shown))
+                    if shown:
+                        say("")
+                else:
+                    data = await self.router.chat(e.model, e.messages, self.tools)
+            except (RuntimeError, httpx.HTTPError) as err:
+                say(f"\n[api error] {err}", "r")
                 return
             usage = data.get("usage") or {}
             e.cost += float(usage.get("cost") or 0)
             e.tokens += int(usage.get("total_tokens") or 0)
             msg = (data.get("choices") or [{}])[0].get("message") or {}
             text = (msg.get("content") or "").strip()
+            thought = (msg.get("reasoning") or "").strip()
             calls = msg.get("tool_calls") or []
             e.messages.append({k: v for k, v in {"role": "assistant", "content": msg.get("content") or "",
                                                  "tool_calls": calls or None}.items() if v is not None})
+            if thought:
+                if "reasoning" not in shown:
+                    say(f"\n{e.model} (thinking): {self._clip(thought)}", "dim")
+                self._log("model reasoning", thought)
             if text:
-                say(f"\n{e.model}: ", "c", end="")
-                say(text)
+                if "content" not in shown:
+                    say(f"\n{e.model}: ", "c", end="")
+                    say(self._clip(text) if calls else text)  # working notes between tool calls are cut; answers aren't
                 self._log("model", text)
             if not calls:
-                if not e.submitted and nudges > 0:
+                passed, stop = self._interjections(e)  # typed while it was answering
+                if passed and not stop:
+                    continue
+                if not e.submitted and nudges > 0 and not stop:
                     nudges -= 1
                     e.messages.append({"role": "user", "content": NUDGE})
                     self._log("runner", NUDGE)
@@ -244,7 +400,7 @@ class Arena:
             args = json.loads(fn.get("arguments") or "{}")
         except json.JSONDecodeError as err:
             args, bad = None, f"Invalid JSON arguments: {err}"
-        say(f"  -> {name}({_short(args)})", "dim")
+        say(f"  -> {name}({json.dumps(args) if self.verbose and args is not None else _short(args)})", "dim")
         images: list[dict] = []
         if args is None:
             text = bad
@@ -293,13 +449,43 @@ class Arena:
             say(f"     {d['result'].get('name')}: {d['result'].get('value')} {d['result'].get('unit')}"
                 f"  (drift {m.get('drift_deg')} deg, fell {m.get('fell')})", "g")
         elif name == "run_contest" and "winner" in d:
-            say(f"     {d.get('contest')}: {d.get('green')} vs {d.get('red')} -> winner "
-                f"{d.get('winner_zook') or 'none'}", "g")
+            res = (f"winner {d['winner_zook']}" if d.get("winner_zook") else
+                   "draw (time limit)" if d.get("status") == "timeout" else
+                   "draw" if d.get("status") == "finished" else f"no result ({d.get('status')})")
+            say(f"     {d.get('contest')}: {d.get('green')} vs {d.get('red')} -> {res}", "g")
         elif name == "submit_design" and "outcome" in d:
-            e.submitted = True
-            say(f"     SUBMITTED {d['design']}: {d['outcome'].upper()} (score {d['score']})", "m")
+            e.submitted, e.design = True, d["design"]
+            e.qualified = e.qualified or d["outcome"] == "win"
+            how = " (time limit)" if d["outcome"] == "draw" and d.get("status") == "timeout" else ""
+            say(f"     SUBMITTED {d['design']}: {d['outcome'].upper()}{how} (score {d['score']})", "m")
+            say("     QUALIFIED for the /contest knockout" if e.qualified else
+                "     not qualified for /contest (only a win qualifies)", "m" if e.qualified else "y")
         if isinstance(d.get("budget"), dict) and d["budget"].get("reminder"):
             say(f"     {d['budget']['reminder']}", "y")
+
+    def _clip(self, text: str) -> str:
+        return text if self.verbose else _clip(text)
+
+    @staticmethod
+    def _printer(e: Entrant, shown: list[str]):
+        """on_delta for a streamed reply: a heading whenever it switches between reasoning and
+        text, then the pieces as they come."""
+        def on_delta(kind: str, piece: str) -> None:
+            thinking = kind == "reasoning"
+            if not shown or shown[-1] != kind:
+                if shown:
+                    say("")
+                say(f"\n{e.model}{' (thinking)' if thinking else ''}: ", "dim" if thinking else "c", end="")
+                shown.append(kind)
+            say(piece, "dim" if thinking else "", end="")
+        return on_delta
+
+    def _winning_submission(self, folder: str) -> dict | None:
+        d = self.cfg.zoo_dir / folder
+        if not (d / f"challenge-{self.challenge.name}.json").exists():
+            return None
+        subs = ChallengeState(self.challenge, d).data.get("submissions", [])
+        return next((s for s in subs if s.get("outcome") == "win"), None)
 
     # --- commands ---
     def leaderboard(self) -> None:
@@ -317,7 +503,8 @@ class Arena:
             say("  (no entrants yet)", "dim")
         for score, name, best, used in sorted(rows, key=lambda r: -r[0]):
             res = f"{best['outcome'].upper():5s} score {best['score']}  with {best['design']}" if best else "not submitted"
-            say(f"  {name:45s} {res}  ({used} runs)")
+            q = "  qualified" if best and best["outcome"] == "win" else ""
+            say(f"  {name:45s} {res}  ({used} runs){q}")
 
     def open_media(self) -> None:
         if not self.entrant or not self.entrant.last_media:
@@ -327,6 +514,82 @@ class Arena:
             if Path(p).exists() and hasattr(os, "startfile"):
                 os.startfile(p)  # noqa: S606 (local media files we produced)
                 say(f"opened {p}", "dim")
+
+    async def contest(self) -> None:
+        """Knockout between the Zooks that won their challenge game this session, then the
+        winner's speech; the audience's next messages go to the winner."""
+        seats = [tournament.Seat(e.model, e.design) for e in self.entrants.values() if e.qualified and e.design]
+        if len(seats) < 2:
+            names = ", ".join(s.billing() for s in seats) or "nobody yet"
+            say(f"A contest needs two qualified Zooks (a win in the challenge game); qualified: {names}.", "y")
+            return
+        from .runner import Engine, Job, contests
+        from .sdk.store import Zoo
+
+        engine = Engine()
+        engine.prepare()
+        zoo = Zoo(engine.install, examples_root=engine.root / "Teams" / "examples" / "Creatures")
+        info = contests.find(self.challenge.evaluation.contest, engine.install)
+
+        def play(green: tournament.Seat, red: tournament.Seat, seed: int) -> tuple[str, str | None, str]:
+            job = Job(info, zoo.resolve(green.zook).path, zoo.resolve(red.zook).path, seed=seed,
+                      duration=self.challenge.time_limit, video=True, model="Tournament")
+            r = engine.run(job, name=f"cup-{info.contest_file}")
+            return r.status, r.winner, _game_stats(r, green.zook_name, red.zook_name)
+
+        def pause(what: str = "the next match") -> None:  # time to read a match's result
+            if not self.keyboard:
+                return
+            self.keyboard.drain()  # typing during the games doesn't skip the pause
+            say(f"\n  [Enter] for {what} ", end="")
+            self.keyboard.get()
+
+        say(f"\n*** THE {info.name.upper()} KNOCKOUT: {len(seats)} qualified Zooks ***", "b")
+        for s in seats:
+            say(f"    {s.billing()}  [{s.zook}]")
+        say("    Leave the game window in front while the games play.", "dim")
+        rounds, places = await asyncio.to_thread(tournament.knockout, seats, play, say, pause=pause)
+        await asyncio.to_thread(pause, "the final ranking")
+        champ = places[0][1]
+        say("\n  Final ranking", "b")
+        for place, s in places:
+            say(f"  {place:>2}. {s.billing()}")
+        say(f"\n*** {champ.model} WINS THE KNOCKOUT with {champ.zook_name}! ***", "m")
+
+        path = []
+        for b in (b for bouts in rounds for b in bouts if b.b is not None and champ in (b.a, b.b)):
+            other = b.b if b.a is champ else b.a
+            path.append(f"beat {other.billing()} in {len(b.games)} game(s)"
+                        + (" on a coin toss" if b.how == "coin toss" else ""))
+        standings = "; ".join(f"{p}. {s.billing()}" for p, s in places)
+        self.entrant = self.entrants[champ.model]
+        await self._connect(champ.model)
+        prompt = (f"Your Zook {champ.zook_name} has just WON the {info.name} knockout tournament between the "
+                  f"qualified models' Zooks. Your path: {'; '.join(path)}. Final ranking: {standings}. "
+                  "Give the audience a short victory speech (under 150 words). After that the audience may "
+                  "ask you questions.")
+        self.entrant.messages.append({"role": "user", "content": prompt})
+        self._log("runner", prompt)
+        await self.converse()
+        say("\n(Questions for the champion: just type them. /next or /challenger carries on.)", "dim")
+
+    async def offer_contest(self) -> None:
+        """When the queue has run out, ask whether to play the knockout now."""
+        if self.queue or not self.keyboard:
+            return
+        qualified = [e for e in self.entrants.values() if e.qualified and e.design]
+        if len(qualified) < 2:
+            say(f"\nThe queue is empty. {len(qualified)} model(s) qualified: /contest needs two "
+                "(add more with /challenger <model>).", "dim")
+            return
+        self.keyboard.drain()
+        say(f"\nThe queue is empty and {len(qualified)} models have qualified. Run the knockout contest now? [Y/N] ",
+            "b", end="")
+        answer = await asyncio.to_thread(self.keyboard.get)
+        if (answer or "").strip().lower() in ("y", "yes"):
+            await self.contest()
+        else:
+            say("No contest for now: /contest starts it whenever you like.", "dim")
 
     async def status(self) -> None:
         if not self.session:
@@ -341,6 +604,9 @@ class Arena:
         if os.name == "nt":
             os.system("")  # enable ANSI colours in cmd.exe
         say("BAMZOOKi Arena - type /next to call the first challenger, /help for commands.", "b")
+        say("You can type while a model works: it gets your message after its current step (/stop halts it).",
+            "dim")
+        self.keyboard = Keyboard()
         if self.auto:
             while self.queue:
                 await self.start(self.queue.pop(0))
@@ -348,11 +614,15 @@ class Arena:
             await self._disconnect()
             return
         while True:
+            say("\nyou> ", end="")
             try:
-                line = (await asyncio.to_thread(input, "\nyou> ")).strip()
-            except (EOFError, KeyboardInterrupt):
+                line = await asyncio.to_thread(self.keyboard.get)
+            except KeyboardInterrupt:
                 break
-            if not line:
+            if line is None:
+                break
+            line = line.strip()
+            if not line or line == "/stop":
                 continue
             cmd, _, arg = line.partition(" ")
             if cmd in ("/quit", "/exit"):
@@ -364,11 +634,13 @@ class Arena:
                     say("The queue is empty: use /challenger <openrouter model id>.", "y")
                     continue
                 await self.start(self.queue.pop(0))
+                await self.offer_contest()
             elif cmd == "/challenger":
                 if not arg:
                     say("usage: /challenger <openrouter model id>, e.g. /challenger openai/gpt-5", "y")
                     continue
                 await self.start(arg.strip())
+                await self.offer_contest()
             elif cmd == "/list":
                 say("queue: " + (", ".join(self.queue) or "(empty)"))
             elif cmd == "/leaderboard":
@@ -377,6 +649,8 @@ class Arena:
                 self.open_media()
             elif cmd == "/status":
                 await self.status()
+            elif cmd == "/contest":
+                await self.contest()
             elif cmd.startswith("/"):
                 say("unknown command; /help lists them", "y")
             else:
@@ -401,6 +675,29 @@ def _prune_images(messages: list[dict], keep: int = 2) -> None:
                     m["content"] = [{"type": "text", "text": "[earlier images omitted to save space]"}]
 
 
+def _game_stats(r, green: str, red: str) -> str:
+    """One line of a tournament game's result for the audience."""
+    names = {"green": green, "red": red}
+    v = r.verdict
+    parts = [f"{r.status}, {r.sim_time:.0f} s simulated"]
+    if r.scores:
+        parts.append("scores " + ", ".join(f"{names.get(c, c)} {s:g}" for c, s in r.scores.items()))
+    if v and v.decided_by != "none":
+        parts.append(f"decided by {v.decided_by}")
+    if r.finish_time is not None:
+        parts.append(f"finish {r.finish_time:.1f} s after Go")
+    if v and any(v.fell.values()):
+        parts.append("fell: " + ", ".join(names.get(c, c) for c, f in v.fell.items() if f))
+    return " | ".join(parts)
+
+
+def _clip(text: str, words: int = SHOW_WORDS) -> str:
+    parts = text.split()
+    if len(parts) <= words:
+        return text
+    return " ".join(parts[:words]) + f" ... [+{len(parts) - words} words]"
+
+
 def _short(args) -> str:
     if not isinstance(args, dict):
         return ""
@@ -423,6 +720,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--max-tokens", type=int, default=int(a_cfg.get("max_tokens", 4000)))
     ap.add_argument("--temperature", type=float, default=a_cfg.get("temperature"))
     ap.add_argument("--auto", action="store_true", help="run every queued challenger without the prompt, then show the leaderboard")
+    ap.add_argument("--verbose", "-v", action="store_true",
+                    help="stream the model's reasoning and notes as it writes them, and show them and "
+                         "its tool arguments in full (not cut to 100 words)")
     a = ap.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -431,5 +731,5 @@ def main(argv: list[str] | None = None) -> None:
         challenge_path = REPO_ROOT / challenge_path
     challenge = Challenge.load(challenge_path)
     queue = a.challenger or list(a_cfg.get("challengers", []))
-    arena = Arena(challenge, queue, a.max_turns, a.max_tokens, a.temperature, a.auto)
+    arena = Arena(challenge, queue, a.max_turns, a.max_tokens, a.temperature, a.auto, a.verbose)
     asyncio.run(arena.repl())

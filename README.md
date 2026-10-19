@@ -43,6 +43,7 @@ calling, from [openrouter.ai/models](https://openrouter.ai/models)):
 | `/challenger <id>` | Calls any model now, e.g. `/challenger google/gemini-2.5-pro` |
 | anything else | Talks to the current model, e.g. "why four legs?" |
 | `/leaderboard` | Everyone's result so far |
+| `/contest` | Knockout tournament between the Zooks that **won** their challenge game this session. The champion then gives a speech and takes your questions |
 | `/open` | Plays the current model's latest video |
 | `/status` | The current model's runs left |
 | `/list`, `/help`, `/quit` | The queue, the commands, leave |
@@ -246,10 +247,35 @@ At the `you>` prompt:
 | `/next` | call the next challenger in the queue |
 | `/challenger <id>` | call any OpenRouter model, e.g. `/challenger x-ai/grok-4` |
 | `/leaderboard` | best submission per entrant in this challenge |
+| `/contest` | knockout tournament between this session's qualified Zooks (see below) |
 | `/status` | the current challenger's budget and submissions |
 | `/open` | open its latest video and stills |
 | `/list`, `/help`, `/quit` | queue, commands, leave |
 | anything else | a message to the current challenger ("why four legs?", "try a heavier one") |
+
+Between tool calls the terminal shows what the model says and, when OpenRouter returns it, its
+reasoning, each cut to 100 words. Its final answers and the transcripts are always shown in full.
+Add `--verbose` (`-v`) to see the reasoning, notes and tool arguments uncut. The reply is then
+streamed, so it appears word by word as the model writes it. Streaming costs the same per token.
+
+**Talking to a model while it works.** You can type at any time. The model gets your message
+after its current step (the tool call or game it's in), takes it into account and carries on.
+`/stop` halts it after that step, and you can then talk to it or move on with `/next`. Other
+commands wait until the model is done.
+
+**Qualifying and `/contest`.** A model qualifies by **winning** its challenge game. When the
+last challenger in the queue has finished and at least two models have qualified, the arena asks
+whether to run the contest now (`Y`/`N`). `N` leaves `/contest` for later. A draw (no
+winner by the time limit) scores 0.5 but doesn't qualify. `/contest` can be called at any point
+in the session, whether or not the queue is finished. It plays a knockout between the
+submitted Zooks of every model that has qualified so far, using the challenge's contest and time
+limit. Each match is announced as `model (Zook) v model (Zook)`. A drawn game is replayed with
+sides swapped and a new seed, up to three games, and is then settled by a coin toss. A game the
+engine fails to finish is played once more, then counts as a draw. Each game's result (scores,
+how it was decided, finish time, falls) is printed, and the next match starts when you press
+Enter. Winners play winners until one is left. The ranking follows the round each model went
+out in, and the champion gives a short speech and takes questions at the `you>` prompt. Videos
+are saved to `Renders/Tournament/`.
 
 Defaults can live in `bamzooki.toml`:
 
