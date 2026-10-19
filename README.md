@@ -63,6 +63,13 @@ python tools/replay.py play   .cache/bamzooki/runs/<run>     # watch a .bvz in t
 python tools/replay.py render .cache/bamzooki/runs/<run> --view overview   # re-render a replay to MP4
 ```
 
+**Renders** go to `renders/<model>/<YYYY-MM-DD_HH-MM-SS>_<contest>_<green>-vs-<red>_seed<N>.mp4`,
+with a `.json` beside each one (verdict, Zooks, seed, run folder). `<model>` is the model operating
+the run: pass `--model claude-opus-5-5` (or `model=` in Python, or set `BAMZOOKI_MODEL`); the
+default is `manual`. Replay re-renders are named `<timestamp>_<run>_replay-<view>.mp4`. The
+`renders/` folder is gitignored (renders contain game visuals) and configurable as
+`render_dir` in `bamzooki.toml`.
+
 Views for `--video` / `--camera single` / `replay.py render`: `follow` (both Zooks, default),
 `overview` (whole arena), `green`, `red` (chase cams). Without `--video` the contest shows the
 game's own 5-view layout. Capturing frames slows the engine in proportion to the window's

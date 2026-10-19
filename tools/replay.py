@@ -2,7 +2,7 @@
 
   python tools/replay.py play   RUN_DIR_OR_BVZ     # open in the game's Motion Player (play/pause/seek UI)
   python tools/replay.py render RUN_DIR_OR_BVZ [--view follow|overview|green|red] [--fps 25]
-                                                   # render to replay.mp4 with our camera
+                                                   # render to renders/<model>/<timestamp>_..._replay-<view>.mp4
 
 Contests are recorded with: python tools/run_contest.py ... --record
 """
@@ -33,13 +33,14 @@ def main() -> int:
     ap.add_argument("replay")
     ap.add_argument("--view", choices=sorted(VIEWS), default="follow")
     ap.add_argument("--fps", type=float, default=25)
+    ap.add_argument("--model", help="render folder under renders/ (default $BAMZOOKI_MODEL or 'manual')")
     a = ap.parse_args()
     engine = Engine()
     if a.action == "play":
         engine.play_replay(bvz(a.replay))
         print("Motion Player started.")
         return 0
-    res = engine.render_replay(bvz(a.replay), view=a.view, fps=a.fps)
+    res = engine.render_replay(bvz(a.replay), view=a.view, fps=a.fps, model=a.model)
     print(f"{res['status']}: {res.get('frames')} frames, video {res['video']}, {res['wall_time']:.1f}s"
           f"{'  ERROR ' + res['error'] if res.get('error') else ''}")
     return 0 if res.get("video") else 1

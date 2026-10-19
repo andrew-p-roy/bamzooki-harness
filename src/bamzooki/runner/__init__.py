@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import threading
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -78,6 +79,17 @@ class Job:
     position: str = "none"  # move the window: right / left / center / none (stay where it opens)
     config: dict = field(default_factory=dict)  # extra Config.Set values
     track_interval: float = 0.5
+    model: str | None = None  # who designed/operates this run; renders go to <render_dir>/<model>/
+
+
+def default_model() -> str:
+    """Render folder name when none is given: $BAMZOOKI_MODEL, else "manual"."""
+    return os.environ.get("BAMZOOKI_MODEL") or "manual"
+
+
+def zook_label(path: Path | None) -> str | None:
+    """A Zook's name is its folder name (Teams/<team>/Creatures/<Name>/<ver>.zook)."""
+    return Path(path).parent.name if path else None
 
 
 @dataclass
@@ -112,6 +124,7 @@ class Engine:
         self.cache = self.install.config.cache_dir
         self.root = self.cache / "sandbox" / "install"
         self.runs = self.cache / "runs"
+        self.render_dir = self.install.config.render_dir
 
     # --- setup -------------------------------------------------------------------
     def prepare(self) -> None:
@@ -150,7 +163,8 @@ class Engine:
         user has been idle 3 s), "always" (re-take whenever lost)."""
         self.prepare()
         self.write_video_cfg(job.window)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
+        started = datetime.now()
+        stamp = started.strftime("%Y%m%d-%H%M%S")
         run_dir = self.runs / f"{stamp}-{name or job.contest.contest_file}"
         run_dir.mkdir(parents=True, exist_ok=True)
         out = run_dir / "result.dat"
@@ -208,14 +222,17 @@ class Engine:
         verdict = judge(raw, job.contest.players) if raw else None
         video = None
         if job.video and frames_dir.exists() and any(frames_dir.iterdir()):
-            from .video import VideoError, frames_to_mp4
+            from .video import VideoError, frames_to_mp4, render_path
+            names = [zook_label(z) for z in (job.green, job.red) if z]
+            parts = [job.contest.name, "-vs-".join(names), f"seed{job.seed}" if job.seed is not None else None]
             try:
-                video = frames_to_mp4(frames_dir, run_dir / "contest.mp4", job.video_fps)
+                video = frames_to_mp4(frames_dir, render_path(self.render_dir, job.model or default_model(),
+                                                              parts, started), job.video_fps)
             except VideoError as e:
                 error = f"{error or ''}\nvideo: {e}".strip()
         go = raw.get("go_time", job.go_time)
         ft = raw.get("finish_time", -1)
-        return Result(
+        result = Result(
             status=status, contest=job.contest.name,
             winner=verdict.winner if verdict else None,
             scores=verdict.scores if verdict else {},
@@ -223,18 +240,22 @@ class Engine:
             finish_time=(ft - go) if isinstance(ft, (int, float)) and ft >= 0 else None,
             sim_time=raw.get("sim_time", 0.0), wall_time=wall, run_dir=run_dir,
             replay=replay if replay and replay.exists() else None, video=video, error=error, raw=raw)
+        if video:
+            _write_sidecar(video, job, result)
+        return result
 
     # --- replays -------------------------------------------------------------------
     def render_replay(self, replay: Path, video: bool = True, fps: float = 25.0, speed: float = 2.0,
                       view: str | dict | None = None, window: tuple[int, int] | None = None,
-                      position: str = "none",
+                      position: str = "none", model: str | None = None,
                       timeout: float | None = None, focus: str = "idle") -> dict:
         """Play a .bvz/.bmv through our camera; with video=True also capture frames and encode
-        replay.mp4 next to the run's other files. Playback is frame-stepped: every update (0.07 s)
+        <render_dir>/<model>/<timestamp>_<run>_replay-<view>.mp4. Playback is frame-stepped: every update (0.07 s)
         advances speed x 0.02 s of replay time (speed 2 = one 25 fps frame per update, about
         0.6x real time). Returns the player's result table plus "video" and "run_dir"."""
         self.prepare()
         self.write_video_cfg(window)
+        started = datetime.now()
         replay = Path(replay).resolve()
         run_dir = self.runs / f"{time.strftime('%Y%m%d-%H%M%S')}-replay-{replay.stem}"
         frames_dir = run_dir / "frames"
@@ -258,14 +279,17 @@ class Engine:
         res = table.loads(out.read_text("latin-1")) if out.exists() else {"status": status}
         res.update(run_dir=run_dir, wall_time=wall, error=error, video=None)
         if video and any(frames_dir.iterdir()):
-            from .video import frames_to_mp4
-            res["video"] = frames_to_mp4(frames_dir, run_dir / "replay.mp4", fps)
+            from .video import frames_to_mp4, render_path
+            source = replay.parent.name if replay.name == "replay.bvz" else replay.stem
+            view_name = view if isinstance(view, str) else ("follow" if view is None else "custom")
+            out_mp4 = render_path(self.render_dir, model or default_model(), [source, f"replay-{view_name}"], started)
+            res["video"] = frames_to_mp4(frames_dir, out_mp4, fps)
         return res
 
     def play_replay(self, replay: Path, wait: bool = False) -> subprocess.Popen:
         """Open a .bvz in the game's own Motion Player (interactive UI: pause, seek, replay)."""
         self.prepare()
-        self.write_video_cfg((960, 540))
+        self.write_video_cfg(None)
         cmd = self.install.config.wine_command + [str(self.root / ENGINE_EXE), "-init", "contestfileplayer",
                                                   "-videocfg", VIDEO_CFG, "-f", str(Path(replay).resolve())]
         proc = subprocess.Popen(cmd, cwd=self.root, stdin=subprocess.DEVNULL,
@@ -330,6 +354,24 @@ class Engine:
             status = "engine_error"
             error = f"[{state['error_window']}]\n{error or ''}"
         return status, error, time.time() - t0
+
+
+def _write_sidecar(video: Path, job: Job, r: Result) -> None:
+    """<video>.json next to each render: what was played and how it ended."""
+    import json
+
+    v = r.verdict
+    info = {
+        "contest": r.contest, "contest_file": job.contest.contest_file, "model": job.model or default_model(),
+        "green": zook_label(job.green), "red": zook_label(job.red),
+        "green_file": str(job.green) if job.green else None, "red_file": str(job.red) if job.red else None,
+        "seed": job.seed, "status": r.status, "winner": r.winner, "scores": r.scores,
+        "decided_by": v.decided_by if v else None, "fell": v.fell if v else {},
+        "finish_after_go_s": r.finish_time, "sim_s": r.sim_time, "wall_s": round(r.wall_time, 1),
+        "view": job.view if isinstance(job.view, str) else "custom", "fps": job.video_fps,
+        "run_dir": str(r.run_dir), "replay": str(r.replay) if r.replay else None,
+    }
+    video.with_suffix(".json").write_text(json.dumps(info, indent=2), encoding="utf-8")
 
 
 def run_contest(contest: str, green: str | Path | None = None, red: str | Path | None = None,

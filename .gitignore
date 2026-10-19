@@ -1,6 +1,9 @@
 # --- Local configuration (machine-specific paths) ---
 /bamzooki.toml
 
+# --- Video renders (renders/<model>/<timestamp>_....mp4 + .json); contain game visuals ---
+/renders/
+
 # --- Extraction cache / install sandbox (decrypted scripts, decoded Zooks, keys-derived data) ---
 /.cache/
 

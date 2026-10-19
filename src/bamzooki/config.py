@@ -25,6 +25,7 @@ _ENV = {
     "save_dir": "BAMZOOKI_SAVE_DIR",
     "wine_command": "BAMZOOKI_WINE",
     "cache_dir": "BAMZOOKI_CACHE_DIR",
+    "render_dir": "BAMZOOKI_RENDER_DIR",
 }
 
 
@@ -34,6 +35,7 @@ class Config:
     save_dir: Path | None = None
     wine_command: list[str] = field(default_factory=list)
     cache_dir: Path = REPO_ROOT / ".cache" / "bamzooki"
+    render_dir: Path = REPO_ROOT / "renders"  # MP4s: <render_dir>/<model>/<timestamp>_....mp4
     source: Path | None = None  # config file that was read, if any
 
 
@@ -68,6 +70,8 @@ def load_config() -> Config:
         cfg.save_dir = _resolve(v, base)
     if v := raw.get("cache_dir"):
         cfg.cache_dir = _resolve(v, base)
+    if v := raw.get("render_dir"):
+        cfg.render_dir = _resolve(v, base)
     if v := raw.get("wine_command"):
         cfg.wine_command = shlex.split(v) if isinstance(v, str) else list(v)
     return cfg

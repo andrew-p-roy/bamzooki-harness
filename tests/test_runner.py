@@ -77,6 +77,27 @@ def test_frame_sequence_repeats_across_gaps(tmp_path):
     assert [p.name for p in seq] == ["frame_000003.hex"] + ["frame_000004.hex"] * 3 + ["frame_000007.hex"]
 
 
+def test_render_path_is_per_model_and_timestamped(tmp_path):
+    from datetime import datetime
+
+    from bamzooki.runner.video import render_path, slug
+
+    p = render_path(tmp_path, "claude-opus-5-5", ["Zook Sumo", "Ant-vs-Spider", "seed1"],
+                    datetime(2026, 10, 19, 18, 47, 10))
+    assert p == tmp_path / "claude-opus-5-5" / "2026-10-19_18-47-10_Zook-Sumo_Ant-vs-Spider_seed1.mp4"
+    assert p.parent.is_dir()
+    assert slug("a/b\\c: d?") == "a-b-c-d" and slug("") == "unnamed"
+
+
+def test_renders_folder_is_gitignored():
+    import subprocess
+
+    from bamzooki.config import REPO_ROOT
+
+    r = subprocess.run(["git", "check-ignore", "-q", "renders/manual/x.mp4"], cwd=REPO_ROOT)
+    assert r.returncode == 0
+
+
 def test_decode_hex_frame():
     from bamzooki.runner.video import VideoError, decode_hex_frame
 

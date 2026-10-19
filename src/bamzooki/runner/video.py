@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 FRAME_RE = re.compile(r"frame_(\d{6})\.(hex|jpg|png|bmp)$", re.I)
@@ -19,6 +20,20 @@ FRAME_RE = re.compile(r"frame_(\d{6})\.(hex|jpg|png|bmp)$", re.I)
 
 class VideoError(RuntimeError):
     pass
+
+
+def slug(text: str) -> str:
+    """Filesystem-safe name part: letters, digits, '.', '-'; everything else becomes '-'."""
+    return re.sub(r"-{2,}", "-", re.sub(r"[^A-Za-z0-9.\-]+", "-", str(text))).strip("-.") or "unnamed"
+
+
+def render_path(render_dir: Path, model: str, parts: list[str], when: datetime | None = None,
+                suffix: str = ".mp4") -> Path:
+    """<render_dir>/<model>/<YYYY-MM-DD_HH-MM-SS>_<part>_<part>....mp4 (folder created)."""
+    folder = Path(render_dir) / slug(model)
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = (when or datetime.now()).strftime("%Y-%m-%d_%H-%M-%S")
+    return folder / ("_".join([stamp] + [slug(p) for p in parts if p]) + suffix)
 
 
 def find_ffmpeg(configured: str | None = None) -> str:

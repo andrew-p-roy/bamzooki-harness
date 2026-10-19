@@ -16,3 +16,7 @@
 # Where decrypted scripts, decoded Zooks and the install sandbox go.  BAMZOOKI_CACHE_DIR
 # Relative paths are resolved against the repo root. Must stay gitignored.
 # cache_dir = ".cache/bamzooki"
+
+# Where MP4 renders go, one folder per model: <render_dir>/<model>/<timestamp>_<contest>_....mp4
+# Relative paths are resolved against the repo root. Gitignored by default ("renders/").   BAMZOOKI_RENDER_DIR
+# render_dir = "renders"

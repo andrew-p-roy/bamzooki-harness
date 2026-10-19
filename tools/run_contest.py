@@ -42,7 +42,8 @@ def main() -> int:
     ap.add_argument("--duration", type=float, default=90)
     ap.add_argument("--no-stop", action="store_true", help="keep running after the finish")
     ap.add_argument("--record", action="store_true", help="save a .bvz replay")
-    ap.add_argument("--video", action="store_true", help="capture frames and encode contest.mp4")
+    ap.add_argument("--video", action="store_true", help="capture frames and encode an MP4 into renders/<model>/")
+    ap.add_argument("--model", help="model operating this run (render folder); default $BAMZOOKI_MODEL or 'manual'")
     ap.add_argument("--camera", choices=["split", "single"], default="split")
     ap.add_argument("--view", choices=["follow", "overview", "green", "red"], default="follow",
                     help="view for --camera single / --video")
@@ -63,7 +64,7 @@ def main() -> int:
     job = Job(info, zook_path(engine, a.green), zook_path(engine, a.red), seed=a.seed, duration=a.duration,
               stop_on_finish=not a.no_stop, record=a.record, video=a.video, camera=a.camera, view=a.view,
               window=tuple(int(x) for x in a.window.lower().split("x")) if a.window else None,
-              position=a.position)
+              position=a.position, model=a.model)
     if a.raw_overrides:
         job.overrides = {}
     r = engine.run(job, focus=a.focus)
