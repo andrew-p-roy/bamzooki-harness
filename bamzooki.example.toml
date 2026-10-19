@@ -1,0 +1,18 @@
+# Copy to `bamzooki.toml` (gitignored) and edit, or point BAMZOOKI_CONFIG at another file.
+# Every path may also be overridden by an environment variable (shown next to each key).
+# Leave a key out to use auto-discovery.
+
+# Root of the BAMZOOKi install (contains Bonsai.exe and he.skx).       BAMZOOKI_INSTALL
+# install_dir = "C:/Program Files (x86)/BAMZOOKi"
+
+# Per-user save root the engine writes to (Teams/, Contests/, ...).   BAMZOOKI_SAVE_DIR
+# Windows default: %APPDATA%/Bamzooki
+# save_dir = "C:/Users/me/AppData/Roaming/Bamzooki"
+
+# Command prefix used to launch Bonsai.exe on Linux/macOS.            BAMZOOKI_WINE
+# Unset on Windows. Example: ["wine"] or ["env", "WINEPREFIX=/home/me/.wine-bamzooki", "wine"]
+# wine_command = ["wine"]
+
+# Where decrypted scripts, decoded Zooks and the install sandbox go.  BAMZOOKI_CACHE_DIR
+# Relative paths are resolved against the repo root. Must stay gitignored.
+# cache_dir = ".cache/bamzooki"
