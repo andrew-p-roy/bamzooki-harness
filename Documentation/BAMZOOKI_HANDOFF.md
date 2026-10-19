@@ -31,31 +31,46 @@ Agents\World\BuilderParts\*.dff     RenderWare meshes
 ContestPacks\ContestPack1.dat       contest definitions (plain-text table, read by System.ReadTable)
 Contests\Contest Pack\*.contest     12 contests (CP_ZOOK_SUMO, CP_ZOOK_SUPER_HURDLES, CP_ZOOK_TAG, ...)
 Teams\examples\zook_list.tab
-Teams\examples\Creatures\<Name>\<ver>.zook   Ant, Leapsa, Scrabber, Spider, Twigger
-NewCreature\1.0.zook
+Teams\examples\Creatures\<Name>\<ver>.zook   Ant/2.1, Leapsa/58.57, Scrabber/196.195, Spider/2.1, Twigger/1.0, Wormthing/330.329
+Teams\examples\Components\<name>             extension-less files that are Bonsai archives (part presets: "a blob", "crawl", ...)
+NewTeam\                                     template copied to the save root's Teams/myZooks on first run
+NewCreature\1.0.zook                         format "1.0" Zook (archive header "New Zook", CRLF text)
 Fonts\*.met, many .png/.bmp textures
 ```
 
-User saves live under the user profile (found in `%APPDATA%`/`%LOCALAPPDATA%`; old apps writing to Program Files may also land in `%LOCALAPPDATA%\VirtualStore\Program Files (x86)\BAMZOOKi`). **Confirm the exact save root** and record how the engine labels it (`%HOME%`, `MYDOCUMENTS`, `EXPORT`; see §3).
+**Save root (verified, M0):** the engine's `HOME` label is `%APPDATA%` (e.g. `C:\Users\<u>\AppData\Roaming`). `Scripts/ProductConfiguration` creates the product directory `HOME/Bamzooki` and sets config `product_directory` to it. It holds `Teams/myZooks/`, `Contests/`, `Videos/` (`TempSaveVideo.bmv` while recording), `TeamSelection.dat`, `Video.cfg`, `passport_image.bmi`, `tempExpressed.zook`, and empty `Bonsai/Scripts` and `Bonsai/Agents/{Governor,World}` folders (see the soft-boot note in §3). `MYDOCUMENTS` is `Documents`; saved motion files go to `Documents/My BAMZOOKi/Motion Files/*.bvz`. No VirtualStore redirection was seen. The engine error log is `%APPDATA%\BonsaiErrorLog.txt`, written only when an error occurs and overwritten each time.
 
-**Zook naming rule (verified in game):** the file must be called `1.0.zook` (version naming `<major>.<minor>.zook`) and the **Zook's name is its folder name**: `.../Creatures/<ZookName>/1.0.zook`.
+**Zook naming rule:** files are named `<major>.<minor>.zook`. The examples use versions such as 2.1 and 58.57, so `1.0.zook` is only what a new Zook gets, not a requirement. The **Zook's name is its folder name**: `.../Creatures/<ZookName>/<ver>.zook`. *(Corrected in M0: the earlier "must be called 1.0.zook" was too strict.)*
 
 ---
 
 ## 3. Engine facts
 
-- **Bonsai Engine** by Gameware Development ("Creature Labs"), build 158, dated 7 Apr 2006. Graphics: **RenderWare 3.4**. Crypto: **Crypto++**. Compression: **zlib**.
-- The game is **almost entirely Lua scripts** run by `Bonsai.exe`. The Lua dialect is old (Lua 4/early 5 style): `for i,v in t do`, string functions under `String.strfind` / `String.strsub`, and `Number.random`. Check the exact version before writing scripts (e.g. look for `_VERSION`, or try `pairs`).
+- **Bonsai Engine** by Gameware Development ("Creature Labs"), build 158, dated 7 Apr 2006. Graphics: **RenderWare 3.4**. Physics: **MathEngine Karma** (the exe has Karma strings and `Physics_Sim_*` config). Crypto: **Crypto++**. Compression: **zlib**.
+- The game is **almost entirely Lua scripts** run by `Bonsai.exe`. **Verified M0: the dialect is a patched Lua 4.0** (`_VERSION == "Lua 4.0"` at runtime, and the exe has "Lua 4.0"). Rules for writing scripts:
+  - No `local function`, no `pairs`/`ipairs`/`pcall`/`globals`/`dofile`. Iterate with `for k,v in t do` or `next`. Nested functions can't see outer locals (Lua 4 upvalues need `%name`), so use globals.
+  - The build adds a `false` value. **A condition that evaluates to `nil` is a runtime error** ("condition evaluated to nil"), so write `while k ~= nil do`, not `while k do`.
+  - `[[...]]` long strings misbehaved inside `dostring` (not investigated further). Keep code in separate files.
+  - Base functions present: `call assert dostring error foreach foreachi getn next print sort tinsert tremove tonumber tostring type _ALERT _ERRORMESSAGE`, plus engine `Trace Execute ExecuteString SetPoolSize`. String functions live under `String.*`, maths under `Number.*`.
+  - Global API tables in a **boot** VM: `Agent Attributes Bin Config Debug Matrix Number Quatn Segment Spot String System Table Vector World`. `Genome`, `Camera`, `GUI`, `Visual`, `Input`, `Sound`, `UI` and others are **nil in the boot VM**. They're component tables that only exist inside agents declaring them (`# X specializes Y embeds Visual, Input`). `tools/spike/gen_probe.py` dumps the full member lists.
+  - Useful extras: `String.ReadFile(path)` / `String.WriteFile(path, text)` (read or write any text, so results can be written as JSON directly), `Bin.ReadFile/WriteFile/ToString/DecryptScript`, `Debug.GetGlobals`, `System.Exit/BrutalAbort/GetHostname/DateTimeString`.
+- **Agents ("Munki" classes):** `.sax` source starts with a header line `# Name specializes Base [final] [embeds A, B]`. Each agent has its own VM, and globals aren't shared. `Agent.CreateClassFromString(source_string)` defines a class at runtime (it needs a **string**; a `Bin` is rejected). A subclass inherits the parent's `Initialize` and other functions, and can override any `Message*`/`Timer*` handler. `Agent.SetTimer("Name", agent, "id", seconds)` calls `TimerName()`. `Agent.SendMessage`/`PostMessage("Name", agent, [delay,] ...)` call `MessageName(...)`.
+- **Script errors** are logged to `BonsaiErrorLog.txt` with file, line and function, then the engine shows a modal error dialog and **hangs**. Always run it with a timeout and kill it.
+- **Trace output (verified M0):** `Trace(...)` goes to **`OutputDebugString`**, prefixed `[ munki ]`. Engine messages are prefixed `[ engine release ]`/`[ engine error ]`. Capture it with a DBWIN listener (`tools/spike/engine.py run --trace FILE`) or DebugView. Nothing goes to stdout, and `-debug` / `-luastack` made no visible difference for simple scripts. Config `trace_behaviours = 1` makes the BehaviourManager trace every event, which is very useful.
+- **Do not give the engine a pipe for stdout/stderr.** With `stdout=PIPE` the main loop stalls after about 1 s, even though nothing is ever written. Use DEVNULL or a file. (This first looked like a "window must have focus" problem. It isn't: with stdout redirected away from a pipe, the engine runs fine in the background.)
+- **Speed:** with rendering on, contest sim time runs at about real time (30.6 s sim in 33.8 s wall clock). Hello-world boot and exit takes about 3–4 s.
+- **`-videocfg <name>`** reads `HOME/Bamzooki/<name>` (default `video.cfg`): `windowed`, `resolution_x/y`, `bit_depth`, `quality`, `shadow_quality`. The user's `Video.cfg` was fullscreen 1920×1080, so the spike uses its own `aiharness.vcfg` (windowed 800×600) in the save root.
 - **Launch command lines** (from the installed shortcuts):
   ```
   Bonsai.exe -init builder           -videocfg builder.vcfg           -splash ".\BAMZOOKi Zook Kit Splash"
   Bonsai.exe -init contestrunner     -videocfg contestrunner.vcfg     -splash ".\BAMZOOKi Simulator Splash"
   Bonsai.exe -init contestfileplayer -videocfg contestfileplayer.vcfg -splash ".\BAMZOOKi Motion Player Splash"
   ```
-  `-init <name>` selects `Scripts/Boot/<name>.ssx`, so **a custom boot script = `-init <ourname>`**.
-- Other command-line flags found in the exe (*unverified behaviour*): `-debug`, `-luastack`, `-safe` (sets `safe_mode`), `-monitor`, `-studio`, `-splash`, `-videocfg`. The Motion Player boot script also parses `-f <file.bvz>` from `System.GetCommandLine()`.
-- **Path labels** in the exe: `%ROOT%`, `%SCRIPTS%` = `%ROOT%/Scripts/` (boot scripts in `Boot/`), `%ALLAGENTS%` = `%ROOT%/Agents/`, `%WORLDAGENTS%`, `%GOVERNORAGENTS%`, `GENOMES` = `%ROOT%/Agents/World/Evo/`, `%HOME%` (`%HOME%\Worlds\`), `MYDOCUMENTS`, `EXPORT`.
-- A config variable **`script_extension`** exists in the exe. It may allow loading plain `.lua` scripts instead of encrypted `.ssx`/`.sax` (*unverified*). If not, re-encrypt (§4.3; round-trip verified offline).
+  `-init <name>` selects `Scripts/Boot/<name>.ssx`, so **a custom boot script = `-init <ourname>`**. **Verified M0:** a boot script re-encrypted with the public key derived from `he.skx` runs, and `ROOT` is the folder of the `Bonsai.exe` that was launched. A full **copy** of the install (17 MB) works, so the real install never needs to change. The exe refuses script paths outside the script directory ("Drive \ and .. not permitted").
+- Other command-line flags found in the exe: `-debug`, `-luastack`, `-safe` (sets `safe_mode`), `-monitor`, `-studio`, `-splash`, `-videocfg`. The Motion Player boot script also parses `-f <file.bvz>` from `System.GetCommandLine()`. Unknown flags are ignored, so boot scripts can define their own (the spike loader uses `-script <file>`).
+- **Path labels** in the exe: `%ROOT%`, `%SCRIPTS%` = `%ROOT%/Scripts/` (boot scripts in `Boot/`), `%ALLAGENTS%` = `%ROOT%/Agents/`, `%WORLDAGENTS%`, `%GOVERNORAGENTS%`, `GENOMES` = `%ROOT%/Agents/World/Evo/`, `%HOME%` (`%HOME%\Worlds\`), `MYDOCUMENTS`, `EXPORT`. Read them at runtime with `System.GetLabeledPath("HOME")` etc.
+- **`script_extension`** (config key, parsed next to `-safe`/`-luastack`): **not needed**. `Boot/hello.lua` is not found ("file does not exist"), and plain text named `hello.ssx` fails ("Unknown error from VM"). The workaround is better anyway. **One** encrypted loader boot script (`tools/spike/lua/loader.lua`) runs `dostring(String.ReadFile(path))` on a plain-text file given with `-script <path>`, which may live anywhere, such as the repo. Everything else (boot logic and agent classes via `CreateClassFromString`) can stay plain text, so the only generated encrypted file is the loader.
+- **Soft boot hook:** `Scripts/SoftConfiguration` decrypts and runs `HOME/Bamzooki/Bonsai/Scripts/<product>_init.ssx` and the registry key `<product>_soft_boot`, but **no boot script calls SoftConfiguration**, so it's dormant.
 - **Lua APIs** the scripts use (useful for our boot script):
   - `System.*`: MainLoop, ExitMainLoop, GetCommandLine, ReadTable, WriteTable, ReadArchiveTable, WriteArchiveTable, Zip, Unzip, GetDirectoryContents, IsValidPath, CreateDirectory, DeleteFile, RealTime, AbsoluteTime, GMDateTimeString, UsingEncryption (always returns 1), IsArchive, GetMachineId, BuildNumber
   - `Agent.*`: Create, Destroy, SendMessage, PostMessage, SetTimer, StopTimer, Me, Zap, IsValid, CreateClassFromString
@@ -77,7 +92,9 @@ User saves live under the user profile (found in `%APPDATA%`/`%LOCALAPPDATA%`; o
 <payload>
 ```
 
-- `.zook` user header = `"\nThis zook file is not compatible with this software. Please upgrade your software."`. It is a decoy message for older versions, set by config `genome_archive_header`.
+- `.zook` user header = `"\nThis zook file is not compatible with this software. Please upgrade your software."`. It is a decoy message for older versions, set by config `genome_archive_header`. **Not universal:** `NewCreature/1.0.zook` (format `<zook version = "1.0">`) has the header `"New Zook"`. Readers must accept any header, and writers should preserve it.
+- Extension-less `Teams/*/Components/<name>` files are also Bonsai archives. `tools/extract.py` decodes all 36 encrypted and 2 plain archives in the install and save root.
+- `GenomeConfiguration` comments that the Zook password may be set to `false` "to only load unarchived ascii files". That could enable plain-text Zooks for a patched config (*untested*).
 - `.bmi` (passport image) user header = `"Image Version 1.0"`.
 - **Payload:**
   - If an encryption key is given: **Blowfish-ECB(key)** over a **zlib stream**, zero-padded to a multiple of 8 bytes. The engine errors with `BA0008 FIle is not encryption aligned` otherwise.
@@ -117,7 +134,7 @@ XML-like text, `<tag attr = "value" >` style, with attributes in alphabetical or
 - No header. The file size is always a multiple of 64.
 - **RSA-OAEP (SHA-1, MGF1-SHA-1), 512-bit key**, applied per block: each 64-byte ciphertext block yields **22 bytes** of plaintext. The concatenated plaintext is a **zlib stream** of the Lua **source** (comments included).
 - The private key is `he.skx` in the install root: PKCS#8 DER, e = 17. The engine loads it (string `he.skx`) and decrypts scripts through a custom stream reader.
-- **Re-encryption** (for patched or custom scripts): zlib-compress the source, split it into 22-byte chunks, OAEP-encrypt each with the public key derived from `he.skx`. Round trip verified offline; not yet tested in game.
+- **Re-encryption** (for patched or custom scripts): zlib-compress the source, split it into 22-byte chunks, OAEP-encrypt each with the public key derived from `he.skx`. **Verified in game (M0):** re-encrypted boot scripts load and run. The engine accepts our zlib level-9 stream, and OAEP's random padding doesn't matter.
 
 ### 4.4 Other formats
 
@@ -132,8 +149,10 @@ XML-like text, `<tag attr = "value" >` style, with attributes in alphabetical or
 There are two secrets, and **both must be derived at runtime from the user's own install, never committed**:
 
 1. **Script key:** load `<install>/he.skx` directly.
-2. **Zook password:** decrypt `<install>/Scripts/GenomeConfiguration.ssx` with (1), then extract the string argument of `Config.Set("genome_rhesus_macaque", "...")` with a regex.
-   - Similarly, `registry_key` (protects `Registry.sdx`) is set in `Scripts/Boot/Builder.ssx`. It's only needed if the harness has to read or write the registry settings file.
+2. **Zook password:** decrypt `<install>/Scripts/GenomeConfiguration.ssx` with (1), then extract the string argument of `Config.Set("genome_rhesus_macaque", "...")` with a regex. **Skip commented lines:** a `--~` commented line and an inline comment repeat the setting (`bamzooki.install.find_config_string` does this).
+   - Similarly, `registry_key` (protects `Registry.sdx`) is set in `Scripts/Boot/Builder.ssx` (verified; derived the same way). It's only needed if the harness has to read or write the registry settings file.
+
+**Implemented (M0):** `bamzooki.install.Install` (discovery and keys), with the guard in `bamzooki.guard` / `tools/check_assets.py`. The guard runs in pre-commit, CI and pytest. It rejects game file types (`.ssx .sax .skx .zook .dff .bmi .bmv .bvz .sdx .contest`) and any file that starts with the Bonsai archive magic. When an install is available it also rejects the derived Zook password and registry key (raw, lowercase, hex, base64) and the `he.skx` bytes. CI has no install, so CI only runs the file-type and content checks. The local pre-commit hook does the secret scan.
 
 Implementation rules:
 
@@ -153,8 +172,9 @@ Implementation rules:
 | `Scripts/Boot/ContestFilePlayer.ssx` | Motion Player boot; parses `-f`, unzips `.bvz`, `VisualFilePlayer` → `OpenFileNoUI` |
 | `Agents/World/BuilderParts/BuilderParts.sax` | `SaveGenome` / load (`Genome.SaveArchived`, `Genome.LoadDirectToTable`) |
 | `Agents/Governor/ContestRunner/ContestRunner.sax` | `ReadContestDefinitions()` (loads `ContestPacks/*.dat`), `RunContest()`: builds `contestants[i] = {fullname = team.."/Creatures/"..creature.."/"..version..".zook"}` then `SendMessage("BeginContest", myContest, name, contestDef, contestants)` |
-| `Agents/Governor/ContestRunnerContest/ContestRunnerContest.sax` | `MessageBeginContest`, `BeginRound`, `MessageBehaviourReport` (scoreboard: `message.scoreboard.score[1..2]`, scored as `contestDef.score` = green/red/both), `MessageEndRound` (iterates `contestDef.rounds`, then `EndContest` → `ContestFinished`), recording (`StartRecordTimer` / `TimerRecord` / `RecordThenGo`) |
-| `Agents/World/Contest/Contest.sax` | `MessageContestantsSelected`, `InstantiateAll`, `Go`, `BehaviourReport` (builds scoreboard with contestant ids and descriptions) |
+| `Agents/Governor/ContestRunnerContest/ContestRunnerContest.sax` | `MessageBeginContest`, `BeginRound` (creates the world, `SplitScreen` camera, `Contest` world agent, lights; `Go` at sim time 4), `MessageBehaviourReport`, `MessageEndRound`, recording (`TimerUpdate` **always** starts `World.OpenVisualOutput(TempSaveVideo.bmv)` after sim time 1; `TimerRecord`; `RecordThenGo`). **Correction (M0):** the live `MessageBehaviourReport` only updates on-screen score text, and only when `contestDef.score` is set, which `ContestPack1.dat` never does. The round-ending logic (`finish` → `EndRound`) lives in `MessageBehaviourReportOld`, which is **unused**. In the shipped Simulator a contest only ends when the user clicks Stop, and nothing reacts to `finish`. |
+| `Agents/World/Contest/Contest.sax` | `MessageContestantsSelected`, `InstantiateAll`, `Go`, `BehaviourReport` (adds `scoreboard.contestant[i]` contestant indices and `description[i]` to the scoreboard, then posts it to the notify agent) |
+| `Agents/World/BehaviourManager/BehaviourManager.sax` | Runs a contest's `behaviours` graph from the `.contest` file (`triggerOnEvents` etc.). The `Finish` behaviour sends `{name="finish", scoreboard={player, score}}` up to `Contest`. |
 | `Scripts/Behaviours/*.ssx` | Win/lose and scoring rules per contest |
 | `Agents/World/Evo/Evo.sax` | Evolution-related world agent (`Initialize(pos, rot, genomeFile, ...)`, damage/collision). Investigate: combined with `Genome.Mutate` there may be a built-in evolution path. |
 | `Agents/Governor/Photographer/*.sax` | Renders Zook snapshots (`Camera.GetImageAsString`), useful for vision feedback |
@@ -165,11 +185,22 @@ Implementation rules:
 ## 7. Objectives & milestones
 
 ### M0: Setup & verification
-- [ ] Config: install path, save-root path, and Wine prefix (if not Windows).
-- [ ] `tools/extract.py`: derive keys (§5), decrypt all scripts into the gitignored cache, decode the example Zooks.
-- [ ] Determine the Lua version and whether `script_extension` allows plain-text scripts. Otherwise confirm re-encrypted scripts load (start with a trivial `-init hello` boot script that calls `Trace` and exits).
-- [ ] Find where `Trace` output goes (log file? `-debug` console?). This is the main debugging channel.
-- [ ] Confirm the engine runs under Wine (Linux), then under Docker + Xvfb.
+- [x] Config: install path, save-root path, and Wine command (`bamzooki.toml`, env overrides; see README).
+- [x] `tools/extract.py`: derive keys (§5), decrypt all 116 scripts into the gitignored cache, decode all 7 Zooks plus the other archives.
+- [x] Lua version: **Lua 4.0 (patched)**. `script_extension` was not needed: re-encrypted boot scripts load, and an encrypted loader runs plain-text Lua (§3).
+- [x] `Trace` output goes to **OutputDebugString** (§3).
+- [x] Minimal headless contest (no selection UI): `tools/spike/lua/contest_spike.lua` + `AIHarnessContest.sax.lua` ran **Zook Sumo, Ant vs Spider**, caught `finish`, wrote the scoreboard with `System.WriteTable` and exited (code 0) in about 9 s. Two runs gave identical scoreboards. **Caveat:** Sumo's `finish` fires at sim time ~4.0, right after Go, because its `NoContact` behaviours use `timeout = 0`, which triggers on the first update tick (see §8). With `stop_on_finish = 0` the bout ran its full 30 s of sim time without problems.
+- [ ] Confirm the engine runs under Wine (Linux), then under Docker + Xvfb. *(Not attempted.)*
+
+#### M0 spike: how to reproduce
+```
+python tools/spike/engine.py backup            # save root + error log → .cache/bamzooki/backup/<ts>
+python tools/spike/engine.py sandbox           # copy install → .cache/bamzooki/sandbox/install
+python tools/spike/engine.py put tools/spike/lua/loader.lua loader     # the only encrypted file
+python tools/spike/engine.py run --timeout 120 --trace .cache/bamzooki/logs/t.txt -- \
+    -init loader -videocfg aiharness.vcfg -script C:/abs/path/tools/spike/lua/contest_spike.lua
+```
+`aiharness.vcfg` must exist in the save root (windowed 800×600). Results go to `<sandbox>/contest_out.dat` and the spike logs.
 
 ### M1: Zook SDK (Python)
 - [ ] Codec: archive container read/write (§4.1), key passed in.
@@ -210,9 +241,10 @@ Implementation rules:
 
 - The meaning of the 5-byte marker `00 01 00 00 00` (possibly flags + version).
 - Whether passport `details` and `modifications` are validated or recomputed; whether `uid` matters for loading or contests.
-- Whether contest scoring is deterministic (same Zooks give the same result?). This matters for evaluation, so test it early.
-- How `Trace` / logging output is exposed.
-- Whether the engine can run without a visible window or with rendering disabled.
+- Whether contest scoring is deterministic. Two Sumo runs gave identical scoreboards, but those ended at t≈4 s, so this is not yet meaningful. Test it on full-length bouts.
+- **Contest win conditions are unreliable as shipped.** Nothing in the consumer Simulator acts on `finish` (§6), and at least Sumo's `NoContact` (`timeout = 0`) fires immediately. For M2, decide per contest whether to (a) patch behaviour params at load time (e.g. a non-zero `NoContact` timeout), (b) ignore `finish` and judge from world state at a fixed sim time (positions, contacts), or (c) both. Survey all 12 contests' behaviour graphs first.
+- Whether the engine can run without a visible window or with rendering disabled. A window is still created (SimpleFrame). It doesn't need focus, but runs at about real time.
+- Capturing frames: `PrintWindow` on the engine window gives a blank (blue) 3D view, so video will need the in-engine path (`Camera.SaveAsJpeg` inside an agent embedding Camera) or a desktop-duplication grab.
 - Wine compatibility of RenderWare 3.4 / DirectX on the target machines.
 
 ---
