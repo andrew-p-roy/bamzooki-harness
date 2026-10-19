@@ -14,11 +14,11 @@ title = "Test"
 description = "do it"
 [budget]
 runs = 2
-[[evaluation]]
+[evaluation]
 contest = "Zook Sumo"
 opponent = "Spider"
-seeds = [1, 2]
-side = "both"
+seed = 2
+side = "red"
 """
 
 
@@ -32,13 +32,17 @@ def challenge(tmp_path):
 def test_default_challenge_loads():
     c = Challenge.load()
     assert c.runs == 20 and c.submissions == 1 and set(c.counts) == {"run_contest", "run_trial"}
-    assert len(c.matches()) == 9
+    assert (c.evaluation.contest, c.evaluation.opponent, c.evaluation.seed) == ("Zook Sumo", "Spider", 1)
+    assert c.describe()["evaluation_game"]["side"] == "green"
 
 
-def test_matches_expand_sides_and_seeds(challenge):
-    games = challenge.matches()
-    assert len(games) == 4
-    assert {(g["side"], g["seed"]) for g in games} == {("green", 1), ("green", 2), ("red", 1), ("red", 2)}
+def test_evaluation_is_one_game(challenge, tmp_path):
+    assert (challenge.evaluation.seed, challenge.evaluation.side) == (2, "red")
+    bad = tmp_path / "bad.toml"
+    bad.write_text('name = "b"\n[[evaluation]]\ncontest = "A"\nopponent = "B"\n'
+                   '[[evaluation]]\ncontest = "C"\nopponent = "D"\n')
+    with pytest.raises(ValueError, match="single game"):
+        Challenge.load(bad)
 
 
 def test_budget_counts_and_persists(challenge, tmp_path):

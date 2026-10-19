@@ -1,4 +1,4 @@
-"""Challenges: the task given to a model, its run budget and the final evaluation.
+"""Challenges: the task given to a model, its run budget and the final evaluation game.
 
 A challenge is a TOML file (see challenges/default.toml):
 
@@ -6,16 +6,19 @@ A challenge is a TOML file (see challenges/default.toml):
     title = "..."
     description = \"\"\"...\"\"\"          # shown to the model by get_challenge
     [budget]
-    runs = 20                        # engine test runs the model may use (0 = unlimited)
+    runs = 20                        # test runs (one game each) the model may use (0 = unlimited)
     counts = ["run_contest", "run_trial"]
     submissions = 1                  # how many times submit_design may be called
-    [[evaluation]]                   # official matches run by submit_design (not counted)
-    contest = "Zook Sumo"
-    opponent = "Spider"              # an example Zook
-    seeds = [1, 2, 3]
-    side = "green"                   # the submitted Zook's colour: green, red or both
     [scoring]
-    draw = 0.0                       # points for a draw (win = 1, loss = 0)
+    draw = 0.5                       # points for a draw (win = 1, loss = 0)
+    [evaluation]                     # the ONE official game played by submit_design (not counted)
+    contest = "Zook Sumo"
+    opponent = "Spider"              # an example Zook ("Spider") or a saved design ("model/Name@n")
+    seed = 1
+    side = "green"                   # the submitted Zook's arena colour: green or red
+
+Every run is a single game. Which games to play during testing (trial or contest, which
+contest, which of its Zooks against which opponent, which seed) is up to the model.
 
 Per-model progress lives in <zoo_dir>/<model>/challenge-<name>.json, so restarting the
 server doesn't reset the budget. Reset it with: python tools/challenge.py reset --model X
@@ -38,8 +41,8 @@ DEFAULT_CHALLENGE = REPO_ROOT / "challenges" / "default.toml"
 class Match:
     contest: str
     opponent: str
-    seeds: list[int] = field(default_factory=lambda: [1])
-    side: str = "green"  # green | red | both
+    seed: int = 1
+    side: str = "green"  # green | red
 
 
 @dataclass
@@ -47,10 +50,10 @@ class Challenge:
     name: str
     title: str
     description: str
+    evaluation: Match
     runs: int = 20
     counts: tuple[str, ...] = ("run_contest", "run_trial")
     submissions: int = 1
-    evaluation: list[Match] = field(default_factory=list)
     draw_points: float = 0.0  # a draw (no winner, e.g. time limit) counts this much of a win
     path: Path | None = None
 
@@ -59,33 +62,30 @@ class Challenge:
         path = Path(path) if path else DEFAULT_CHALLENGE
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
         budget = raw.get("budget", {})
-        matches = []
-        for m in raw.get("evaluation", []):
-            side = m.get("side", "green")
-            if side not in ("green", "red", "both"):
-                raise ValueError(f"{path}: evaluation side must be green, red or both")
-            matches.append(Match(m["contest"], m["opponent"], list(m.get("seeds", [1])), side))
+        ev = raw.get("evaluation")
+        if isinstance(ev, list):
+            if len(ev) != 1:
+                raise ValueError(f"{path}: [evaluation] is a single game; use one [evaluation] table")
+            ev = ev[0]
+        if not isinstance(ev, dict) or "contest" not in ev or "opponent" not in ev:
+            raise ValueError(f"{path}: needs an [evaluation] table with contest and opponent")
+        side = ev.get("side", "green")
+        if side not in ("green", "red"):
+            raise ValueError(f"{path}: evaluation side must be green or red")
+        match = Match(ev["contest"], ev["opponent"], int(ev.get("seed", 1)), side)
         return cls(name=raw.get("name", path.stem), title=raw.get("title", path.stem),
-                   description=raw.get("description", "").strip(), runs=int(budget.get("runs", 20)),
+                   description=raw.get("description", "").strip(), evaluation=match,
+                   runs=int(budget.get("runs", 20)),
                    counts=tuple(budget.get("counts", ("run_contest", "run_trial"))),
-                   submissions=int(budget.get("submissions", 1)), evaluation=matches,
+                   submissions=int(budget.get("submissions", 1)),
                    draw_points=float(raw.get("scoring", {}).get("draw", 0.0)), path=path)
-
-    def matches(self) -> list[dict]:
-        """The evaluation expanded into individual games."""
-        games = []
-        for m in self.evaluation:
-            for side in (("green", "red") if m.side == "both" else (m.side,)):
-                for seed in m.seeds:
-                    games.append({"contest": m.contest, "opponent": m.opponent, "side": side, "seed": seed})
-        return games
 
     def describe(self) -> dict:
         return {"title": self.title, "description": self.description,
-                "evaluation": [vars(m) for m in self.evaluation], "games_in_evaluation": len(self.matches()),
-                "scoring": {"win": 1, "draw": self.draw_points, "loss": 0,
-                            "score": "points / games (a draw is a game without a winner)"},
+                "evaluation_game": vars(self.evaluation),
+                "scoring": {"win": 1, "draw": self.draw_points, "loss": 0},
                 "budget": {"runs": self.runs or "unlimited", "counted_tools": list(self.counts),
+                           "each_run_is": "one game: a trial, or one contest between two Zooks you choose",
                            "submissions": self.submissions}}
 
 

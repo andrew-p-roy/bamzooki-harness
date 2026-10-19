@@ -121,10 +121,12 @@ client times out long tool calls, raise its limit (Claude Code: `MCP_TOOL_TIMEOU
 **Challenges.** The server gives the model a task from a challenge file
 (`challenges/default.toml`; choose another with `challenge = "..."` in `bamzooki.toml`,
 `BAMZOOKI_CHALLENGE` or `--challenge`, or run `--no-challenge` for free play). A challenge sets
-the task text, the **test-run budget** (default 20: each `run_trial` / `run_contest` uses one;
-failed engine runs are free) and the **evaluation** that `submit_design` plays (contests ×
-opponent × seeds, outside the budget; score = (wins + draw points) / games). Every run result
-reminds the model how many runs are left. In its tests a model can only use the example Zooks
+the task text, the **test-run budget** (default 20; failed engine runs are free) and the **one
+evaluation game** that `submit_design` plays (contest, opponent, seed, side; outside the budget;
+win 1, draw 0.5, loss 0). **Every test run is a single game that the model chooses** through the
+tool arguments: a trial for one of its Zooks, or one contest with the two Zooks and the seed it
+picks. Which games to spend runs on is its testing strategy. Every run result reminds the model
+how many runs are left. In its tests a model can only use the example Zooks
 and its own designs; other models' designs are hidden and can't be referenced. Progress is kept
 per model in `zooks/<model>/challenge-<name>.json`:
 

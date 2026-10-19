@@ -266,7 +266,7 @@ class Studio:
                 "submitted": self.state.data["submissions"]}
 
     def submit(self, ref: str) -> dict:
-        """Play the challenge's evaluation games with this design (not counted against the budget)."""
+        """Play the challenge's single evaluation game with this design (not counted against the budget)."""
         if not self.challenge:
             return {"error": "No challenge configured."}
         if why := self.state.can_submit():
@@ -274,29 +274,28 @@ class Studio:
         mine = self._ref(ref)
         if mine.owner != self.model:
             return {"error": "Submit one of your own designs."}
-        games = []
-        for g in self.challenge.matches():
-            # Opponents come from the operator's challenge file, so any Zook may be named there
-            # ("Spider" = an example, "<model>/<Name>@n" = a saved design).
-            name = g["opponent"]
-            opp = self.zoo.resolve(name if "/" in name else f"examples/{name}")
-            info = contests.find(g["contest"], self.install)
-            green, red = (mine, opp) if g["side"] == "green" else (opp, mine)
-            if info.players == 1:
-                green, red = mine, None
-            job = Job(info, green.path, red.path if red else None, seed=g["seed"], video=True, model=self.model)
-            with self.lock:
-                r = self.engine.run(job, name=f"eval-{info.contest_file}")
-            games.append({**g, "status": r.status, "winner": r.winner, "won": r.winner == g["side"],
-                          "scores": r.scores,
-                          "finish_after_go_s": None if r.finish_time is None else round(r.finish_time, 2),
-                          "video": str(r.video) if r.video else None})
-        wins = sum(1 for g in games if g["won"])
-        draws = sum(1 for g in games if g["winner"] is None)
-        points = wins + self.challenge.draw_points * draws
-        entry = {"design": mine.label, "score": round(points / len(games), 3) if games else 0.0, "wins": wins,
-                 "draws": draws, "losses": len(games) - wins - draws, "games": len(games), "results": games,
-                 "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+        g = self.challenge.evaluation
+        # The opponent comes from the operator's challenge file, so any Zook may be named there
+        # ("Spider" = an example, "<model>/<Name>@n" = a saved design).
+        opp = self.zoo.resolve(g.opponent if "/" in g.opponent else f"examples/{g.opponent}")
+        info = contests.find(g.contest, self.install)
+        green, red = (mine, opp) if g.side == "green" else (opp, mine)
+        if info.players == 1:
+            green, red = mine, None
+        job = Job(info, green.path, red.path if red else None, seed=g.seed, video=True, model=self.model)
+        with self.lock:
+            r = self.engine.run(job, name=f"eval-{info.contest_file}")
+        outcome = "win" if r.winner == g.side else ("draw" if r.winner is None else "loss")
+        score = {"win": 1.0, "draw": self.challenge.draw_points, "loss": 0.0}[outcome]
+        entry = {"design": mine.label, "game": vars(g), "outcome": outcome, "score": score,
+                 "status": r.status, "winner": r.winner, "scores": r.scores,
+                 "finish_after_go_s": None if r.finish_time is None else round(r.finish_time, 2),
+                 "fell": r.verdict.fell if r.verdict else {},
+                 "video": str(r.video) if r.video else None, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+        if r.video:
+            fin = r.finish_time
+            sheet = self._sheet(r.video, [1.0, 1.0 + (fin or 10) / 2, 1.0 + (fin if fin is not None else 20), 1e9])
+            entry["stills"] = str(sheet) if sheet else None
         self.state.record_submission(entry)
         log = self.zoo.root / self.model / "results.jsonl"
         log.parent.mkdir(parents=True, exist_ok=True)

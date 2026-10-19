@@ -165,21 +165,41 @@ The Zook Kit's UI doesn't offer this, but the engine supports it (Series-1 Zooks
 - Read each contest's rules with `get_contest`. The engine is deterministic for a given seed,
   so a change in result comes from your change.
 
-## 9. Testing loop
+## 9. Testing strategy: you choose every game
 
-1. `save_zook` gives you the Zook Kit's own layout, stats (height, length, width, weight,
-   parts) and three pictures. Check the pictures: is it standing on its legs? Are the legs
+Test runs are **budgeted** (see `get_challenge`, usually 20), and every result tells you how
+many are left. **Each run is exactly one game, and you decide which game it is** through the
+tool's arguments. Picking the games that teach you the most is part of the challenge.
+
+| Tool | One run = | You choose |
+|---|---|---|
+| `run_trial(ref, trial)` | one Zook Kit trial for one Zook | which Zook (`ref`), which trial: `sprint`, `hurdles`, `lap`, `block_push`, `high_jump`, or `free:<Env>` with a `duration` |
+| `run_contest(contest, green, red, seed)` | one contest between two Zooks | which contest, which Zook plays green and which plays red, and the `seed` |
+
+- **Opponents:** any example Zook (`Spider`, `Ant`, `Leapsa`, `Scrabber`, `Twigger`,
+  `Wormthing`) or any of your own designs and versions (`MyZook`, `MyZook@2`). You can pit your
+  new version against your previous one (`green="MyZook@4", red="MyZook@3"`) to check that a
+  change is an improvement.
+- **Seeds:** the same seed gives exactly the same game. Re-running the same game with the same
+  seed teaches you nothing; change the seed to check that a result wasn't luck.
+- **Free (no run used):** `save_zook`, `edit_zook`, `preview_zook`, `get_zook`,
+  `validate_zook`, and all the reference tools. Look at the pictures before spending a run.
+- **Colours:** in contests "green" and "red" are just the two arena sides. The final evaluation
+  game in `get_challenge` says which side your submitted Zook plays, so test on that side.
+
+A sensible plan for a 20-run budget:
+1. Design, `save_zook` and check the pictures (free). Is it standing on its legs, with the legs
    pointing down?
-2. `run_trial` with sprint first (does it walk forwards, how fast, does it drift or fall?),
-   then the trial closest to your target contest. You get the Zook Kit's score plus stills.
-3. `run_contest` against an example Zook. You get the winner, scores, falls, distance
-   travelled, and stills at Go, halfway, the finish and the end.
-4. Change one thing at a time with `edit_zook` and re-test.
-
-Test runs (`run_trial`, `run_contest`) are usually **budgeted** by the challenge (see
-`get_challenge`; every result shows how many runs are left). Saving and previewing are free, so
-look at the pictures before spending a run. In tests you can use the example Zooks or your own
-earlier versions (`MyZook@2`) as opponents. When you're done, `submit_design` your best version.
+2. `run_trial` sprint (1 run): does it walk forwards, how fast, does it drift or fall? If it goes
+   backwards, flip the stride path's x signs (section 6) and re-test.
+3. A trial that matches the challenge (e.g. `block_push` for pushing contests, `hurdles` for
+   obstacles).
+4. `run_contest` against the opponent you must beat, on your evaluation side and seed. If you
+   lose, read the stats and stills (did you fall off, get pushed, walk the wrong way?), change
+   one thing with `edit_zook`, and play the next game: against the target again, or new version
+   against old.
+5. Keep a few runs in reserve to confirm your best version on a different seed. Then
+   `submit_design` it: that plays the single official evaluation game.
 
 ## 10. Limits
 

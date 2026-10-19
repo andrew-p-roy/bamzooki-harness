@@ -22,18 +22,23 @@ from ..studio import DEFAULT_VIEWS, Studio
 INSTRUCTIONS = """\
 You design creatures ("Zooks") for BAMZOOKi and test them in the real 2006 game engine, which
 runs on the user's screen. Start with get_challenge: it states your task, how many test runs
-you have (run_trial and run_contest each use one; every result tells you how many are left),
-and how your final design will be judged (submit_design). Typical loop:
+you have and the one game your final design will be judged on (submit_design).
+
+Each test run is exactly ONE game, and you decide which: run_trial (one Zook Kit trial for one
+of your Zooks) or run_contest (one contest; you pick the contest, the two Zooks and the seed).
+Opponents can be any example Zook or your own earlier designs, including two of your versions
+against each other. Choosing which games to play is your testing strategy; every result tells
+you how many runs are left. Saving and previewing are free. Typical loop:
   1. get_design_guide (once) and list_contests / get_contest for the rules.
   2. get_zook an example ("Ant", "Spider", ...) to see a working design.
   3. save_zook your design (JSON spec). The game's own Zook Kit code lays it out, clamps
      out-of-range values, computes its size/weight, and you get preview images back.
-  4. run_trial it (sprint, hurdles, lap, block_push, high_jump: the Zook Kit's own tests, ~10-30 s)
-     to check it walks, then run_contest it against an example or another design; read the
-     verdict, scores, distance travelled, falls, and look at the stills. Iterate with edit_zook.
+  4. Spend runs on the games that tell you most: e.g. run_trial "sprint" to check it walks
+     forwards, then run_contest against the opponent you must beat, or your new version against
+     your previous one. Read the verdict and stats, look at the stills, improve with edit_zook.
   5. submit_design your best design when you're done (or when your runs are used up).
-Refs: "Ant" (example), "MyZook" (your latest version), "MyZook@2". You can test against the
-example Zooks and your own earlier designs. Contests are deterministic for a given seed.
+Refs: "Spider" (example), "MyZook" (your latest version), "MyZook@2" (a version).
+Contests are deterministic for a given seed.
 """
 
 
@@ -59,11 +64,12 @@ def build_server(studio: Studio) -> MCPServer:
     def get_challenge() -> str:
         return _dump(studio.challenge_info())
 
-    @server.tool(description="Submit your final design for the challenge. It plays the official evaluation "
-                             "games (they don't use test runs) and returns your score. Limited submissions "
-                             "(usually one), so submit your best design.")
-    def submit_design(ref: str) -> str:
-        return _dump(studio.submit(ref))
+    @server.tool(description="Submit your final design for the challenge. It plays the challenge's ONE official "
+                             "evaluation game (shown by get_challenge; it doesn't use a test run) and returns "
+                             "the outcome and score. Limited submissions (usually one): submit your best design.")
+    def submit_design(ref: str) -> list:
+        r = studio.submit(ref)
+        return _with_images(r, {"stills (Go | halfway / finish | end)": r.get("stills")})
 
     @server.tool(description="How Zooks are built: the part schema with every slider's range and "
                              "meaning, available textures, example Zooks, and design tips. Read this first.")
@@ -111,17 +117,20 @@ def build_server(studio: Studio) -> MCPServer:
         r = studio.preview(ref, tuple(views or DEFAULT_VIEWS))
         return _with_images({k: v for k, v in r.items() if k != "previews"}, r.get("previews"))
 
-    @server.tool(description="Run a contest in the real game (on screen, ~20-90 s) and get the verdict: winner by "
-                             "colour and Zook, scores, finish time, distance travelled, falls, the MP4 path, and "
-                             "(with video) a 2x2 sheet of stills: Go, halfway, the finish, the end. "
-                             "green/red are Zook refs (examples or your own designs); single-player "
-                             "contests take only green. Uses one test run; the result shows runs left.")
+    @server.tool(description="Play ONE contest game in the real game (on screen, ~20-90 s). You choose the game "
+                             "with the arguments: `contest` (see list_contests), `green` and `red` = the two Zooks "
+                             "(each an example such as 'Spider' or one of your own designs such as 'MyZook' or "
+                             "'MyZook@2'; you can pit two of your own versions against each other), and `seed` "
+                             "(same seed = same result; change it to check a result isn't luck). Returns the "
+                             "verdict: winner by colour and Zook, scores, finish time, distance travelled, falls, "
+                             "the MP4 path and a 2x2 sheet of stills (Go, halfway, the finish, the end). "
+                             "Single-player contests take only green. Uses one test run; the result shows runs left.")
     def run_contest(contest: str, green: str, red: str | None = None, seed: int = 1, video: bool = True,
                     duration: float = 90.0) -> list:
         r = studio.run(contest, green, red, seed=seed, video=video, duration=duration)
         return _with_images(r, {"stills (Go | halfway / finish | end)": r.get("stills")})
 
-    @server.tool(description="Test one Zook on its own with the Zook Kit's built-in trials (the Test tool): "
+    @server.tool(description="Play ONE trial: test one Zook (`ref`) on its own with the Zook Kit's built-in trials: "
                              "sprint (cm/s over 50 units, 20 s), hurdles (cm/s, 20 s), lap (s per lap, 60 s), "
                              "block_push (cm pushed, 13 s), high_jump (cm, 10 s); or free play in a test "
                              "environment for `duration` seconds: 'free:BoxEnv', 'free:SlopeEnv', 'free:StepEnv', ... "
