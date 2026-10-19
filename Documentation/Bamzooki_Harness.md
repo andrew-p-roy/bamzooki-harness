@@ -1,6 +1,16 @@
-# BAMZOOKi AI Harness — Findings & Handoff
+# BAMZOOKi AI Harness: Findings and Reference
 
-Handoff document for a Claude Code session taking over implementation. Everything in "Findings" was verified by hand against a real install (Zook Kit v3.1, Bonsai Engine build 158) unless marked *unverified*.
+This is the reference for the harness: what the engine and file formats are, how each part was built, and what we learned running real models through it. Everything was verified against a real install (Zook Kit v3.1, Bonsai Engine build 158) unless marked *unverified*, *source* (read in scripts or the exe) or *guess*. For setup and day-to-day commands, see the [README](../README.md).
+
+**Status (October 2026):** M0–M4 work, plus the arena:
+- codecs and runtime key derivation;
+- the Zook SDK;
+- an on-screen contest and trial runner with verdicts, replays and MP4s;
+- an MCP server with vision previews, challenges and run budgets;
+- the `Model Instructions/` folder (design guide, agent prompt, manual);
+- an OpenRouter **arena runner** in which any tool-calling model takes the challenge in turn while you watch and chat with it (§7, "Arena").
+
+Model output lives in an **arena folder outside the repo**.
 
 ---
 
@@ -234,7 +244,7 @@ python tools/spike/engine.py run --timeout 120 --trace .cache/bamzooki/logs/t.tx
   - computes passport stats (`SetPhysicalProperties`: height/length/width ×4 cm, weight, components) and saves an archived v2 Zook.
 
   `HarnessWorkshop` then photographs it (`HarnessCamera.Snapshot` → PNG) from named views. The passport photo album is simply omitted, which the Builder supports (`RemovePassportImage`).
-- [x] Store (`sdk.store.Zoo`): `zooks/<model>/<Name>/<n>.0.zook` + `.json` + previews. Refs: `Ant`, `Name`, `Name@n`, `model/Name@n`.
+- [x] Store (`sdk.store.Zoo`): `<arena_dir>/Zook Entries/<entrant>/<Name>/<n>.0.zook` + `.json` + previews (§7, "Arena folder"). Refs: `Ant`, `Name`, `Name@n`, `entrant/Name@n`.
 - [ ] Optional: export to the game's `Teams/<team>/Creatures/...` (+ `zook_list.tab`) so designs can be opened in the Zook Kit.
 
 Findings while building it (*verified*):
@@ -278,7 +288,7 @@ Remaining:
 ### M3: Rendering (live + video) — implemented
 - [x] **Live:** default is the game's own 5-view SplitScreen with lights. `--camera single` uses one full-window `HarnessCamera` with a named view: `follow` (both Zooks, offset (18, 20, 65), minimum angle 30°), `overview` (the game's whole-arena camera), `green`/`red` (chase cams). The camera re-fits to the window's drawable area every frame.
 - [x] **Recording:** `--record` writes `replay.bmv` via `World.OpenVisualOutput` + `World.WriteVisual` (every 0.02 s, from sim 1 s) and zips it to `replay.bvz` (`System.Zip`). `tools/replay.py play <run>` opens it in the game's Motion Player (`-init contestfileplayer -f <file>`, which must be the last argument). Verified: it loads; press play in its UI.
-- [x] **Video:** `--video` captures frames in-engine and encodes an H.264 MP4 with ffmpeg into `renders/<model>/<YYYY-MM-DD_HH-MM-SS>_<contest>_<green>-vs-<red>_seed<N>.mp4` (gitignored; `render_dir` in config). `<model>` is the model operating the run (`--model` / `model=` / `$BAMZOOKI_MODEL`, default `manual`), and a `.json` sidecar records the verdict, Zooks, seed and run folder. `tools/replay.py render <run> [--view …]` re-renders a `.bvz` to `replay.mp4` with any view, using a frame-stepped player (`HarnessPlayer`).
+- [x] **Video:** `--video` captures frames in-engine and encodes an H.264 MP4 with ffmpeg into `<arena_dir>/Renders/<entrant>/<YYYY-MM-DD_HH-MM-SS>_<contest>_<green>-vs-<red>_seed<N>.mp4` (`render_dir` in config overrides it). `<entrant>` is the folder form of the model operating the run (`--model` / `model=` / `$BAMZOOKI_MODEL`, default `manual`), and a `.json` sidecar records the verdict, Zooks, seed and run folder. `tools/replay.py render <run> [--view …]` re-renders a `.bvz` to `replay.mp4` with any view, using a frame-stepped player (`HarnessPlayer`).
   - Capture uses `Camera.GetImageAsString()`. `Camera.SaveAsJpeg` (called by the game's dead code) **doesn't exist** in this build, and `Camera.SaveToFile` exists but **writes nothing**. The string is hex: `08080800` + width (4 hex) + height (4 hex) + RGB24. `video.py` decodes it and streams raw frames into ffmpeg, then deletes the `.hex` files (about 1.4 MB per 640×360 frame).
   - Frames are indexed by **clock time** (sim time live, replay time in the player), and gaps are filled with the previous frame, so video timing is exact even when the engine runs slower than real time.
   - Cost: capture slows the engine in proportion to pixel count. Measured: 640×360 ×0.73 real time, the default ~884×662 window ≈ ×0.85, 1280×720 visibly not smooth on screen. Without capture, even 1920×1080 runs at about real time. Rendering itself is cheap.
@@ -299,13 +309,120 @@ Remaining:
 
   Results match the Zook Kit's stored passport values (Spider sprint 54.9 = 54.9 cm/s, Twigger 10.3 vs 10.4, Spider lap 18.2 = 18.2 s). Free play in any `*Env` (`free:SlopeEnv`, …) is also available. Trials return forward speed, drift, height range and falls, plus stills.
 - [x] **Stills for vision models:** contests and trials with video return a 2×2 contact sheet (contest: Go, halfway, the finish, the end).
-- [x] **Design guide for models** (`src/bamzooki/docs/zook_design_guide.md`, served by `get_design_guide`): units and weight, attachment geometry, joints and muscles, the stride cycle, single and double stride paths (`ik_points`: semantics read from `Evo.UpdateOneLink`/`UpdateTwoLink`), steering (`turn_sharpness` → minimum amplitude 1 − 2s, `turn_smoothness` → angle 180·s), targeting, body wave (`movement.wave` = legacy `spine_amplitude`, now exposed), gait recipes, what wins, and the test loop. The stride-direction advice was verified (a hexapod walked backwards, then forwards with the path's x flipped).
-- [x] **Challenges** (`bamzooki.challenge`, `challenges/default.toml`): task text, test-run budget (default 20 runs; each `run_trial`/`run_contest` is one game the model chooses via arguments: contest, its Zook, the opponent (example or own version), seed; failed engine runs don't count), submissions (default 1), and ONE evaluation game (contest, opponent, seed, side; default: Zook Sumo vs Spider, seed 1, green) with draw points. Observed: a Spider copy as green loses to Spider as red at seed 1, so side and seed matter. Every run result carries `budget` (used, left, reminder). `get_challenge` / `submit_design` MCP tools. Per-model state in `zooks/<model>/challenge-<name>.json`; `tools/challenge.py status|reset`.
-- [x] **Opponent isolation:** a model sees and can reference only the example Zooks and its own designs; other models' designs are hidden from `list_zooks` and rejected by every tool. (Evaluation opponents in the challenge file may name anything, since the operator controls that file.) The model must not have file access to `zooks/` for this to be watertight.
+- [x] **Design guide for models** (`Model Instructions/Zook Design Guide.md`, served by `get_design_guide`; see "Model Instructions" below): units and weight, attachment geometry, joints and muscles, the stride cycle, single and double stride paths (`ik_points`: semantics read from `Evo.UpdateOneLink`/`UpdateTwoLink`), steering (`turn_sharpness` → minimum amplitude 1 − 2s, `turn_smoothness` → angle 180·s), targeting, body wave (`movement.wave` = legacy `spine_amplitude`, now exposed), gait recipes, what wins, and the test loop. The stride-direction advice was verified (a hexapod walked backwards, then forwards with the path's x flipped).
+- [x] **Challenges** (`bamzooki.challenge`, `challenges/default.toml`): task text, test-run budget (default 20 runs; each `run_trial`/`run_contest` is one game the model chooses via arguments: contest, its Zook, the opponent (example or own version), seed; failed engine runs don't count), submissions (default 1), and ONE evaluation game with draw points. The evaluation game is a contest, an opponent, a seed and a side; the default is Zook Sumo vs Spider, green, **seed 7, kept secret**.
+  - Observed: a Spider copy as green loses to Spider as red at seed 1, so side and seed matter.
+  - Every run result carries `budget` (used, left, reminder).
+  - MCP tools: `get_challenge` / `submit_design`.
+  - Per-entrant state is kept in `<arena_dir>/Zook Entries/<entrant>/challenge-<name>.json`; `tools/challenge.py status|reset`.
+  - `challenges/short.toml` is the same task with 3 runs, for quick sessions.
+  - **Time limit:** `[scoring] time_limit` (default 120 s of play after Go) applies to every contest in a challenge, test games and the evaluation alike. Models can't change it: `run_contest` no longer takes a `duration`. A game with no winner by then is a draw (`draw` points, 0.5 by default). Sumo has no built-in clock (it only ends on a fall), so this limit decides stalemates. Trials keep the Zook Kit's own limits (sprint 20 s, lap 60 s, …). The wall-clock time is longer when the engine window loses focus, because the game slows down rather than skipping time.
+- [x] **Hidden evaluation seed** (`reveal_seed = false`, the default in both shipped challenges). Results are deterministic for a seed (§3), so a model that knows the evaluation seed can rehearse the exact evaluation game with its test runs and submit whatever won it. The first test session did exactly that (see "Model test sessions"). `get_challenge` now shows the seed as "secret (the same for every entrant)": still fair between entrants, but models must design for robustness and pick their own test seeds.
+- [x] **Opponent isolation:** a model sees and can reference only the example Zooks and its own designs. Other entrants' designs are hidden from `list_zooks` and rejected by every tool. (Evaluation opponents in the challenge file may name anything, since the operator controls that file.) For this to be watertight the model must not have file access to the arena folder, which is why the arena runner gives it nothing but the MCP tools.
+- [x] **Entrant names** (`sdk.store.entrant_folder`): an entrant is identified by its **full model name**, such as `anthropic/claude-sonnet-4.5`. Its folder is that name made filesystem-safe (`/`, `:`, … → `_`, e.g. `anthropic_claude-sonnet-4.5`; 1–120 characters; `examples` is reserved).
+  - The name comes from `--model` (or `$BAMZOOKI_MODEL`).
+  - Without one, the server starts unregistered, and the model calls `register_entrant("<its full model name>")` once. Only names not yet used are accepted, so a model can't adopt another entrant's folder.
+  - The arena runner always passes `--model` and hides `register_entrant`.
+  - Example Zooks can be read before registering.
+- [x] **The manual as a tool** (`bamzooki.manual`, `read_manual`): the official Zook Kit PDF has a usable text layer. `pypdf` extracts it, and `manual.clean()` fixes its quirks (headings come out with each letter tripled, `MMMaaakkkiiinnnggg` → `Making`; some paragraphs appear twice). `read_manual()` gives a page index, `pages="17-26"` gives page text, and `search="steer"` finds pages.
+  - The PDF is BBC material, so it isn't in the repo. The user copies it to `Model Instructions/BAMZOOKi Manual.pdf` (gitignored), and the asset guard now rejects any `.pdf`.
+  - Reading it corrected the design guide: **targeting Normal = away from the target, Inverted = towards it** (the guide had this backwards). It also contributed a table mapping each Zook Kit panel option to its spec field, and confirmed movement tips (feet must reach below the body, and IK point density sets the speed along the path).
 - [x] Local HTTP endpoint: `python -m bamzooki.mcp_server --model X --http` (streamable-http, `127.0.0.1:8765/mcp`), verified with the MCP HTTP client.
+- MCP tools (16): `register_entrant`, `get_challenge`, `submit_design`, `get_design_guide`, `read_manual`, `list_contests`, `get_contest`, `list_zooks`, `get_zook`, `validate_zook`, `save_zook`, `edit_zook`, `preview_zook`, `run_contest`, `run_trial`, `list_results`. Server flags: `--model`, `--challenge`, `--no-challenge`, `--http [--host --port]`.
+
+### Model Instructions (`Model Instructions/`, top level)
+Everything a model is told lives in one folder that's easy to find and edit. Nothing in code needs to change to reword it.
+
+| File | Use |
+|---|---|
+| `Agent Prompt.md` | System prompt for an entrant. Rules: use only the bamzooki tools; never open, read or list files, including paths that appear in tool results; register with the full model name if asked. Also covers how to work (challenge → guide → study examples → free previews → plan each run → submit) and the **presentation** to the audience at the end (design, testing strategy game by game, result, what next). The arena runner sends it as the system prompt. For Claude Code/Desktop, paste it as the first message. |
+| `Zook Design Guide.md` | The design guide (`get_design_guide`), including §9 "Testing strategy: you choose every game" |
+| `BAMZOOKi Manual.pdf` | Your own copy of the manual (gitignored), served by `read_manual` |
+| `README.md` | What's here |
+
+### Arena: models compete through OpenRouter (`bamzooki.arena`, `tools/arena.py`)
+A command-line show runner. Each challenger, given as an OpenRouter model id, takes the challenge in turn. You watch its reasoning in the terminal and its games on screen, then talk to it.
+
+**Arena folder.** Everything models produce lives **outside the repo**, in `arena_dir` (default `~/BAMZOOKi Arena`, env `BAMZOOKI_ARENA_DIR`):
+```
+<arena_dir>/Zook Entries/<entrant>/<Name>/<n>.0.zook (+ .json, previews)   designs
+<arena_dir>/Zook Entries/<entrant>/challenge-<name>.json, results.jsonl     budget, submissions, results
+<arena_dir>/Renders/<entrant>/<timestamp>_....mp4 (+ _stills.png, .json)    videos and contact sheets
+<arena_dir>/Transcripts/<entrant>/<timestamp>.md                            full conversations
+```
+`zoo_dir` and `render_dir` can still override the first two individually. The repo's old `zooks/` and `renders/` folders are no longer used.
+
+**How a challenger runs.**
+1. Query OpenRouter `/models` for the id. Skip models that don't list `tools` in `supported_parameters`. Vision support is read from `architecture.input_modalities`.
+2. Start the MCP server over stdio as a child process: `--model <id> --challenge <file>`, **working directory = the arena folder**, with the `BAMZOOKI_*` environment passed on explicitly. `stdio_client` otherwise passes only a minimal environment; found in the smoke test.
+3. Offer the model the MCP tools as OpenAI-style function tools, except `register_entrant`.
+4. System prompt = `Agent Prompt.md` plus "you are registered as `<id>`". Kick-off message: "Begin the challenge now…".
+5. Agent loop over `/chat/completions`:
+   - Tool results go back as `tool` messages.
+   - Images (previews, contact sheets) go back as a follow-up user message with `image_url` data URIs. This only happens for vision models, and only the latest 2 image messages are kept to save tokens.
+   - Each tool call prints a one-line summary (refs, verdicts, the budget reminder).
+   - If the model stops without submitting, it's nudged (up to 3 times).
+   - `--max-turns` (120) caps a session.
+   - Cost and tokens are tracked from `usage: {include: true}`.
+6. When the model answers without tool calls (normally its presentation), you get a `you>` prompt.
+
+**Commands.**
+
+| Command | Effect |
+|---|---|
+| `/next` | Call the next challenger in the queue |
+| `/challenger <id>` | Call a specific model now |
+| `/leaderboard` | Best submission per entrant in this challenge |
+| `/status` | Current budget |
+| `/open` | Open the latest video and stills |
+| `/list` | Show the queue |
+| `/help` | List the commands |
+| `/quit` | Leave |
+| Any other text | Goes to the current model as an audience message. It can answer, and use its tools (spending runs if it has any left). |
+
+`--auto` runs the whole queue unattended, then prints the leaderboard. The queue and limits come from `--challenger` (repeatable), `--challenge`, `--max-turns`, `--max-tokens` and `--temperature`, or from the `[arena]` table in `bamzooki.toml`. The API key is `OPENROUTER_API_KEY` (environment or the repo's gitignored `.env`); it's never printed or logged.
+
+**Repo isolation.** The model gets no file, shell or web tools: only the MCP tools. The server runs in the arena folder, and every path it accepts is a Zook reference, never a file path. Result paths shown to the model (videos) are informational only.
+
+### Model test sessions: findings
+**Session 1: Claude Opus 4.8 via Claude Code** (entrant `claude-test-1`, `challenges/short.toml`: 3 runs, evaluation Sumo vs Spider, seed 1 at the time, green). The model was given only the MCP tools plus the agent prompt.
+- It used only MCP tools (checked in its transcript) and followed the intended loop: challenge → guide → study Spider → design → preview → test → submit.
+- `Bulldozer@1` lost Sumo to Spider at seed 1. It changed one thing (a slower gait), and `Bulldozer@2` won the **same** game: Spider fell, the bout finished 6.5 s after Go, and Bulldozer stayed on the table. It then submitted @2: **WIN, score 1.0, 2 of 3 runs used**.
+- Finding: the run reproduced the evaluation game exactly (same contest, opponent, side and seed). Because the engine is deterministic, the model effectively saw the exam in advance. → **The evaluation seed is now secret by default** (seed 7, `reveal_seed = false`), and the guide's testing plan no longer mentions testing on the evaluation seed.
+- Finding: its work went into a folder named from a short model label. → Entrants are now named by **full model name** (`--model`, or `register_entrant`), with all output in `<arena_dir>/Zook Entries/<entrant>/`. The session's data was moved from the repo's `zooks/` and `renders/` to `~/BAMZOOKi Arena`.
+
+**Session 2: `google/gemini-2.5-flash` via the arena runner** (smoke test of `tools/arena.py --auto`, `challenges/short.toml`, secret seed).
+- The OpenRouter loop worked end to end: the MCP server started in the arena folder, tools were offered as functions, preview images were returned (vision model), budget reminders were respected, and transcripts were written.
+- Once it emitted a hallucinated tool name (`google:python_interpreter`), got "Unknown tool" back, and recovered by itself on the next turn.
+- Design path: a four-legged "Pusher" with **double** legs.
+  - Its first `block_push` trial timed out without moving: the run counted, as intended, since it was a real result.
+  - It then walked backwards (−1.8 cm/s) and spun round (drift −175°). Its double-leg path moved the foot **forwards** (z 0 → 0.8) while on the ground.
+  - It then tried the guide's "flip the x signs" tip, which only applies to single legs (double-leg paths keep x ≈ 0).
+  - → The guide's tip now says it is for single legs; otherwise it was wrong. Deliberately, no extra coaching was added. Opus 4.8 built a walking, winning Zook from the same guide, and working out the movement paths is part of the challenge. The guide should stay correct, not become a walkthrough.
+- With the secret seed it chose its own seed (2) for the Sumo test against Spider.
+- Outcome: the evaluation was recorded as a **draw** (0.5), but that wasn't a real result. The operator closed the engine window mid-game, and the shutdown raised "Unknown error in function Finalize". The cost was $0.09 for 273k tokens. The session exposed the bugs below, all fixed.
+
+Bugs found in session 2 and fixed:
+- **Starved runs counted as real games.** The operator was busy in another window, and the "idle" focus policy only takes the engine window back after 3 s without input. So the engine barely ran: setup alone took 83 s.
+  - The runner's wall-clock kill (then 60 + 2 × game seconds) was reported as `timeout`, the same word the driver uses for the game's own time limit.
+  - So the run counted against the budget and showed "no winner". This happened to the Sumo test and probably to the first `block_push` trial (no result and no movement data).
+  - Now a killed run is `stalled`, with an explanation for the model. It doesn't count and is never scored. The allowance is 120 + 3 × game seconds.
+- **Failed evaluations used up the submission.** `submit_design` scored any non-win as a draw, including `engine_error`. Now only real results (`finished`, or the game's `timeout`) are recorded. Anything else returns "your submission was NOT used; call submit_design again".
+- **The arena missed the submission.** Tool results that carry images also carry text labels, so the arena's one-line summaries tried to parse JSON + labels and failed. Its "submitted" flag was never set, and it nudged Gemini three times with "you haven't submitted yet". Gemini apologised and re-submitted ("Already submitted"). The summaries now parse the first (JSON) block, and nudges are logged in the transcript.
+- **Environment not passed to the server:** the MCP SDK's `stdio_client` passes only a minimal environment to the server process unless `env=` is given, so `BAMZOOKI_ARENA_DIR` was lost. The server wrote into the default arena while the runner's transcript went to the configured one. The runner now passes the `BAMZOOKI_*` variables through and pins the arena folder.
+
+General observations:
+- Strong models follow the "one change per run" loop well.
+- Weaker models over-trust single guide tips, so every tip must be correct and scoped. Keep the guide factual rather than prescriptive, though: the challenge measures the model's design and testing, not how much the guide gives away.
+- The two models tested differently:
+  - Claude went straight to the target contest and iterated on it.
+  - Gemini spent two runs on `block_push` trials, which exposed its walking-direction bug but left a single run for Sumo.
+  - With 3 runs, such strategy choices dominate the result; the 20-run default leaves room for both.
 
 ### M5: Competitions & search (later)
-- [ ] Tournaments between models across the 12 contests, with Elo ratings, saved replays and videos.
+- [x] Models compete on one challenge in the arena (`/leaderboard`: best submission per entrant).
+- [ ] Tournaments between models across the 12 contests, with Elo ratings, saved replays and videos. A natural next step is a challenge type where the evaluation opponent is the *other entrants'* submissions; the operator-controlled challenge file may already name them.
+- [ ] Optional: parallel challengers (needs one desktop per engine, see M2), and a show layout recording the terminal and the engine window side by side.
 - [ ] Hybrid search: the model proposes a body plan and an optimiser (e.g. CMA-ES) tunes the numbers, using `run_contest` as the fitness function.
 
 ---
@@ -321,6 +438,9 @@ Remaining:
 - ~~Whether the engine can run without a visible window.~~ **No** (on Windows); see the M0 follow-up table. Deprioritised.
 - ~~Capturing frames.~~ **Resolved (M3):** `Camera.GetImageAsString()` in a camera agent. `PrintWindow` gives a blank view, `SplitCamera`'s `SaveAsJpeg` path is dead code, and `SaveToFile` writes nothing.
 - Wine compatibility of RenderWare 3.4 / DirectX on the target machines.
+- Whether the double-leg default path walks forwards or backwards: *unverified* (the guide makes no claim).
+- How robust Sumo wins are across seeds: Bulldozer@2's win was at the seed it tested on. With the evaluation seed now secret, the next sessions will show how much a single test seed overfits.
+- Cost per challenger on OpenRouter depends heavily on images: previews and stills are sent only to vision models, and only the latest two image messages are kept in context.
 
 ---
 

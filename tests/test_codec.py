@@ -84,7 +84,7 @@ def test_script_roundtrip(rsa_key, source):
 
 
 def test_script_block_sizes_game_key_size():
-    # RSA-512 + OAEP-SHA1: 64-byte blocks carrying 22 bytes (handoff §4.3).
+    # RSA-512 + OAEP-SHA1: 64-byte blocks carrying 22 bytes (Bamzooki_Harness.md §4.3).
     class Fake:
         key_size = 512
     assert script.block_sizes(Fake()) == (64, 22)

@@ -1,6 +1,6 @@
 # AIHarnessDriver specializes Agent embeds Visual
 
--- Minimal contest driver: no GUI, optional camera. Lua 4.0 dialect (see handoff §3).
+-- Minimal contest driver: no GUI, optional camera. Lua 4.0 dialect (see Bamzooki_Harness.md §3).
 -- Job fields used: contest, out, log, max_sim_time, stop_on_finish, go_time, update_interval,
 -- camera (0 = none, 1 = SplitScreen views + lights, 2 = one 2x2-pixel SplitCamera).
 

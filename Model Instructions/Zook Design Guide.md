@@ -128,7 +128,7 @@ Zook load slowly.
   → put down". **Verified:** side legs (`around` ±45/90/135, `elevation` 30, `up_down` 50)
   with `[[-0.5,-0.1,2],[0.5,-0.1,2],[0.4,0.5,2],[-0.4,0.5,2]]` walk **forwards**, and the same
   path with the x signs flipped walks backwards. Bigger x = longer stride; bigger y = higher steps.
-  If a Zook walks backwards in a sprint trial, flip the x signs.
+  If a Zook with single legs walks backwards in a sprint trial, flip the x signs.
 
 ### double: a two-part limb (thigh + shin)
 Set `movement.type: "double"` on the **lower** part (the shin). Its parent (the thigh) bends
@@ -231,10 +231,10 @@ A sensible plan for a 20-run budget:
 1. Design, `save_zook` and check the pictures (free). Is it standing on its legs, with the legs
    pointing down?
 2. `run_trial` sprint (1 run): does it walk forwards, how fast, does it drift or fall? If it goes
-   backwards, flip the stride path's x signs (section 6) and re-test.
+   backwards, fix the stride path (section 6) and re-test.
 3. A trial that matches the challenge (e.g. `block_push` for pushing contests, `hurdles` for
    obstacles).
-4. `run_contest` against the opponent you must beat, on your evaluation side and seed. If you
+4. `run_contest` against the opponent you must beat, on your evaluation side. If you
    lose, read the stats and stills (did you fall off, get pushed, walk the wrong way?), change
    one thing with `edit_zook`, and play the next game: against the target again, or new version
    against old.

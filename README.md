@@ -2,11 +2,13 @@
 
 Lets AI models design BAMZOOKi creatures (Zooks) through an API and test them in the
 **real** Bonsai engine, with results returned as data. See
-[Documentation/BAMZOOKI_HANDOFF.md](Documentation/BAMZOOKI_HANDOFF.md) for the file formats,
-engine findings and roadmap.
+[Documentation/Bamzooki_Harness.md](Documentation/Bamzooki_Harness.md) for the file formats,
+engine findings, how everything works and what we learned from model test sessions.
 
-Status: M0–M4 working: codecs and key derivation, Zook SDK, on-screen contest runner with
-verdicts, video and replays, and an MCP server for models.
+Status: working end to end. Codecs and key derivation, Zook SDK, on-screen contest and trial
+runner with verdicts, video and replays, an MCP server for models (with challenges and run
+budgets), and an **arena** in which any OpenRouter model takes the challenge while you watch
+and chat with it.
 
 ## Bring your own copy: no BBC files or keys in this repo
 
@@ -43,6 +45,8 @@ cp bamzooki.example.toml bamzooki.toml    # then edit paths (optional on a defau
 | `save_dir`     | `BAMZOOKI_SAVE_DIR`  | per-user save root (Windows: `%APPDATA%\Bamzooki`)              |
 | `wine_command` | `BAMZOOKI_WINE`      | launcher prefix on non-Windows, e.g. `["wine"]`                 |
 | `cache_dir`    | `BAMZOOKI_CACHE_DIR` | extraction cache and install sandbox (default `.cache/bamzooki`) |
+| `arena_dir`    | `BAMZOOKI_ARENA_DIR` | where models' work goes, **outside the repo** (default `~/BAMZOOKi Arena`) |
+| `challenge`    | `BAMZOOKI_CHALLENGE` | challenge file (default `challenges/default.toml`)              |
 
 Set `BAMZOOKI_CONFIG` to use a config file somewhere else. If `install_dir` isn't set, the
 standard Program Files locations (or the default Wine prefix) are searched.
@@ -63,12 +67,11 @@ python tools/replay.py play   .cache/bamzooki/runs/<run>     # watch a .bvz in t
 python tools/replay.py render .cache/bamzooki/runs/<run> --view overview   # re-render a replay to MP4
 ```
 
-**Renders** go to `renders/<model>/<YYYY-MM-DD_HH-MM-SS>_<contest>_<green>-vs-<red>_seed<N>.mp4`,
+**Renders** go to `<arena_dir>/Renders/<model>/<YYYY-MM-DD_HH-MM-SS>_<contest>_<green>-vs-<red>_seed<N>.mp4`,
 with a `.json` beside each one (verdict, Zooks, seed, run folder). `<model>` is the model operating
 the run: pass `--model claude-opus-5-5` (or `model=` in Python, or set `BAMZOOKI_MODEL`); the
-default is `manual`. Replay re-renders are named `<timestamp>_<run>_replay-<view>.mp4`. The
-`renders/` folder is gitignored (renders contain game visuals) and configurable as
-`render_dir` in `bamzooki.toml`.
+default is `manual`. Replay re-renders are named `<timestamp>_<run>_replay-<view>.mp4`.
+`render_dir` in `bamzooki.toml` overrides the folder.
 
 Views for `--video` / `--camera single` / `replay.py render`: `follow` (both Zooks, default),
 `overview` (whole arena), `green`, `red` (chase cams). Without `--video` the contest shows the
@@ -99,8 +102,13 @@ contests** in the real game with a verdict and an MP4.
 
 ```sh
 # Claude Code (from this repo; the --model name picks the folder for designs and videos)
-claude mcp add bamzooki -- <repo>/.venv/Scripts/python.exe -m bamzooki.mcp_server --model claude-opus-5-5
+claude mcp add bamzooki -- <repo>/.venv/Scripts/python.exe -m bamzooki.mcp_server --model anthropic/claude-opus-5-5
 ```
+
+`--model` is the entrant's **full model name**. Its work is filed under
+`<arena_dir>/Zook Entries/<name with / replaced by _>/`. Leave `--model` out and the model
+registers itself with `register_entrant("<its full model name>")` on its first call (only
+new names are accepted).
 
 For Claude Desktop, add the same command to `claude_desktop_config.json` under `mcpServers`.
 With stdio the client starts the server itself, so there is nothing else to run. For other agents
@@ -110,12 +118,12 @@ or frameworks there is a **local HTTP endpoint** instead:
 python -m bamzooki.mcp_server --model my-agent --http          # http://127.0.0.1:8765/mcp
 ```
 
-Tools: `get_design_guide`, `list_contests`, `get_contest`, `list_zooks`, `get_zook`,
-`validate_zook`, `save_zook`, `edit_zook`, `preview_zook`, `run_trial`, `run_contest`,
-`list_results`. Results come straight back in the tool response (the verdict, scores, distance
-travelled, falls, plus a 2×2 sheet of stills for vision models) and are logged to
-`zooks/<model>/results.jsonl`. The game window appears whenever a tool needs the engine
-(save/preview: a few seconds; trial: 10–30 s; contest: up to about a minute and a half). If your
+Tools: `register_entrant`, `get_challenge`, `submit_design`, `get_design_guide`, `read_manual`,
+`list_contests`, `get_contest`, `list_zooks`, `get_zook`, `validate_zook`, `save_zook`,
+`edit_zook`, `preview_zook`, `run_trial`, `run_contest`, `list_results`. Results come straight
+back in the tool response (the verdict, scores, distance travelled, falls, plus a 2×2 sheet of
+stills for vision models) and are logged to `<arena_dir>/Zook Entries/<model>/results.jsonl`. The game window appears whenever a tool needs the engine
+(save/preview: a few seconds; trial: 10–30 s; contest: up to about two and a half minutes). If your
 client times out long tool calls, raise its limit (Claude Code: `MCP_TOOL_TIMEOUT`, in ms).
 
 **Challenges.** The server gives the model a task from a challenge file
@@ -123,30 +131,93 @@ client times out long tool calls, raise its limit (Claude Code: `MCP_TOOL_TIMEOU
 `BAMZOOKI_CHALLENGE` or `--challenge`, or run `--no-challenge` for free play). A challenge sets
 the task text, the **test-run budget** (default 20; failed engine runs are free) and the **one
 evaluation game** that `submit_design` plays (contest, opponent, seed, side; outside the budget;
-win 1, draw 0.5, loss 0). **Every test run is a single game that the model chooses** through the
+win 1, draw 0.5, loss 0). The evaluation seed is **secret** by default (`reveal_seed = false`):
+games are deterministic, so a model that knows the seed can simply rehearse the evaluation game.
+`challenges/short.toml` is the same task with 3 runs. Every contest in a challenge stops after
+`time_limit` seconds of play (default 120, in `[scoring]`); no winner by then is a draw. **Every test run is a single game that the model chooses** through the
 tool arguments: a trial for one of its Zooks, or one contest with the two Zooks and the seed it
 picks. Which games to spend runs on is its testing strategy. Every run result reminds the model
 how many runs are left. In its tests a model can only use the example Zooks
 and its own designs; other models' designs are hidden and can't be referenced. Progress is kept
-per model in `zooks/<model>/challenge-<name>.json`:
+per model in `<arena_dir>/Zook Entries/<model>/challenge-<name>.json`:
 
 ```sh
 python tools/challenge.py status --model claude-opus-5-5
 python tools/challenge.py reset  --model claude-opus-5-5     # give it a fresh budget
 ```
 
-For a fair run, give the model **only the MCP tools**, not file access to this repo (Claude
-Desktop, or Claude Code started in an empty folder). The MCP server hides other models' designs,
-but a model that can read files could still open `zooks/` directly.
+For a fair run, give the model **only the MCP tools**, not file access to this repo or the
+arena folder (the arena runner below, Claude Desktop, or Claude Code started in an empty
+folder with `Model Instructions/Agent Prompt.md` pasted as the first message). The MCP server
+hides other models' designs, but a model that can read files could still open them directly.
 
-The model-facing design guide is `src/bamzooki/docs/zook_design_guide.md`, also served by
-`get_design_guide`. It covers how parts attach and point, joints, the stride cycle and paths
-(single/double), steering, targeting, body waves, gait recipes, what wins each kind of
-contest, and the testing loop.
+**Model Instructions.** Everything models are told is in the top-level
+[`Model Instructions/`](Model%20Instructions/README.md) folder, so you can read and reword it:
+`Agent Prompt.md` (system prompt: tools only, how to work, the presentation at the end),
+`Zook Design Guide.md` (served by `get_design_guide`: how parts attach and point, joints, the
+stride cycle and paths, steering, targeting, body waves, gait recipes, what wins, testing
+strategy), and the official manual, served by `read_manual`. The manual is BBC material, so
+**copy your own PDF** there as `BAMZOOKi Manual.pdf` (gitignored; the asset guard rejects PDFs).
 
-Designs are kept per model in `zooks/<model>/<Name>/<n>.0.zook` with a `.json` (spec, stats,
-notes) and preview PNGs; results append to `zooks/<model>/results.jsonl`. `zooks/` is
-gitignored. The same features are available in Python via `bamzooki.studio.Studio`.
+**The arena folder** (`arena_dir`, default `~/BAMZOOKi Arena`) keeps all model output outside
+the repo:
+
+```
+Zook Entries/<model>/<Name>/<n>.0.zook (+ .json, previews)   designs (spec, stats, notes)
+Zook Entries/<model>/challenge-<name>.json, results.jsonl     budget, submissions, results
+Renders/<model>/...mp4 (+ _stills.png, .json)                 videos and contact sheets
+Transcripts/<model>/<timestamp>.md                            arena conversations
+```
+
+The same features are available in Python via `bamzooki.studio.Studio`.
+
+## The arena: models compete (OpenRouter)
+
+`tools/arena.py` lets **any tool-calling model on OpenRouter** take the challenge, one after
+another. Each challenger gets its own MCP server running in the arena folder and sees nothing
+but the bamzooki tools (plus the preview and contest images if it has vision). You watch its
+reasoning in the terminal and its games on screen. When it has submitted, it presents its
+challenger Zook, its design and its testing strategy, and then **you can talk to it**.
+
+```sh
+# put OPENROUTER_API_KEY=... in .env (gitignored) or the environment
+python tools/arena.py --challenger anthropic/claude-sonnet-4.5 --challenger openai/gpt-5
+python tools/arena.py --challenge challenges/short.toml           # quick 3-run sessions
+python tools/arena.py --auto --challenger google/gemini-2.5-flash # unattended, then leaderboard
+```
+
+At the `you>` prompt:
+
+| command | |
+|---|---|
+| `/next` | call the next challenger in the queue |
+| `/challenger <id>` | call any OpenRouter model, e.g. `/challenger x-ai/grok-4` |
+| `/leaderboard` | best submission per entrant in this challenge |
+| `/status` | the current challenger's budget and submissions |
+| `/open` | open its latest video and stills |
+| `/list`, `/help`, `/quit` | queue, commands, leave |
+| anything else | a message to the current challenger ("why four legs?", "try a heavier one") |
+
+Defaults can live in `bamzooki.toml`:
+
+```toml
+[arena]
+challengers = ["anthropic/claude-sonnet-4.5", "openai/gpt-5", "google/gemini-2.5-pro"]
+challenge = "challenges/short.toml"
+max_turns = 120      # model turns per challenger before the runner stops it
+max_tokens = 4000    # per reply
+```
+
+**While a game is playing, leave the engine window in front** and don't close it. The game only
+runs while its window has focus, and the runner takes focus back only once you've been idle for
+3 s. A run that is starved or closed is reported as `stalled` or `engine_error`. It doesn't
+count against the budget, and a failed `submit_design` can simply be retried.
+
+Each challenger's whole conversation is saved to `Transcripts/<model>/`, and the tokens and
+cost (from OpenRouter) are printed after each reply. Models without tool calling are skipped.
+To let a model try again, run
+`python tools/challenge.py reset --model <id> --challenge challenges/short.toml` (its designs are
+kept; only the budget and submissions reset).
 
 A Zook spec is a tree of Blob parts (see `src/bamzooki/sdk/schema.py` or `get_design_guide`):
 
@@ -170,7 +241,12 @@ src/bamzooki/
   sdk/          Zook SDK: genome codec, design schema, spec <-> genome, validation, zoo store
   runner/       engine runner: sandbox, Lua harness, contests, judge, video, replays, workshop
   studio.py     high-level API for models (design, preview, run, results)
+  challenge.py  challenge files, run budgets, submissions
+  manual.py     read_manual: the Zook Kit PDF as text
   mcp_server/   MCP server wrapping the studio
-tools/          extract.py, check_assets.py, spike scripts
+  arena.py      OpenRouter arena runner
+Model Instructions/  agent prompt, design guide, your manual copy (what models are told)
+challenges/     challenge files (task, budget, evaluation game)
+tools/          arena.py, run_contest.py, replay.py, challenge.py, extract.py, check_assets.py, spikes
 tests/          synthetic codec tests plus install-backed tests (skipped without an install)
 ```
