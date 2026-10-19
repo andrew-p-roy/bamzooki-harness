@@ -176,6 +176,11 @@ The Zook Kit's UI doesn't offer this, but the engine supports it (Series-1 Zooks
    travelled, and stills at Go, halfway, the finish and the end.
 4. Change one thing at a time with `edit_zook` and re-test.
 
+Test runs (`run_trial`, `run_contest`) are usually **budgeted** by the challenge (see
+`get_challenge`; every result shows how many runs are left). Saving and previewing are free, so
+look at the pictures before spending a run. In tests you can use the example Zooks or your own
+earlier versions (`MyZook@2`) as opponents. When you're done, `submit_design` your best version.
+
 ## 10. Limits
 
 - Name: 1–25 characters (letters, digits, spaces, `_ - .`).

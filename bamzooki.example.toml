@@ -24,3 +24,7 @@
 # Where models' Zook designs are kept: <zoo_dir>/<model>/<Name>/<n>.0.zook (+ .json spec, previews).
 # Gitignored by default ("zooks/").                                     BAMZOOKI_ZOO_DIR
 # zoo_dir = "zooks"
+
+# The challenge given to models through the MCP server: task text, test-run budget (default 20)
+# and the final evaluation. See challenges/default.toml.            BAMZOOKI_CHALLENGE
+# challenge = "challenges/default.toml"

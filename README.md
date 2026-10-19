@@ -118,6 +118,25 @@ travelled, falls, plus a 2×2 sheet of stills for vision models) and are logged 
 (save/preview: a few seconds; trial: 10–30 s; contest: up to about a minute and a half). If your
 client times out long tool calls, raise its limit (Claude Code: `MCP_TOOL_TIMEOUT`, in ms).
 
+**Challenges.** The server gives the model a task from a challenge file
+(`challenges/default.toml`; choose another with `challenge = "..."` in `bamzooki.toml`,
+`BAMZOOKI_CHALLENGE` or `--challenge`, or run `--no-challenge` for free play). A challenge sets
+the task text, the **test-run budget** (default 20: each `run_trial` / `run_contest` uses one;
+failed engine runs are free) and the **evaluation** that `submit_design` plays (contests ×
+opponent × seeds, outside the budget; score = (wins + draw points) / games). Every run result
+reminds the model how many runs are left. In its tests a model can only use the example Zooks
+and its own designs; other models' designs are hidden and can't be referenced. Progress is kept
+per model in `zooks/<model>/challenge-<name>.json`:
+
+```sh
+python tools/challenge.py status --model claude-opus-5-5
+python tools/challenge.py reset  --model claude-opus-5-5     # give it a fresh budget
+```
+
+For a fair run, give the model **only the MCP tools**, not file access to this repo (Claude
+Desktop, or Claude Code started in an empty folder). The MCP server hides other models' designs,
+but a model that can read files could still open `zooks/` directly.
+
 The model-facing design guide is `src/bamzooki/docs/zook_design_guide.md`, also served by
 `get_design_guide`. It covers how parts attach and point, joints, the stride cycle and paths
 (single/double), steering, targeting, body waves, gait recipes, what wins each kind of

@@ -21,7 +21,9 @@ from ..studio import DEFAULT_VIEWS, Studio
 
 INSTRUCTIONS = """\
 You design creatures ("Zooks") for BAMZOOKi and test them in the real 2006 game engine, which
-runs on the user's screen. Typical loop:
+runs on the user's screen. Start with get_challenge: it states your task, how many test runs
+you have (run_trial and run_contest each use one; every result tells you how many are left),
+and how your final design will be judged (submit_design). Typical loop:
   1. get_design_guide (once) and list_contests / get_contest for the rules.
   2. get_zook an example ("Ant", "Spider", ...) to see a working design.
   3. save_zook your design (JSON spec). The game's own Zook Kit code lays it out, clamps
@@ -29,8 +31,9 @@ runs on the user's screen. Typical loop:
   4. run_trial it (sprint, hurdles, lap, block_push, high_jump: the Zook Kit's own tests, ~10-30 s)
      to check it walks, then run_contest it against an example or another design; read the
      verdict, scores, distance travelled, falls, and look at the stills. Iterate with edit_zook.
-Refs: "Ant" (example), "MyZook" (your latest version), "MyZook@2", "<model>/<Name>".
-Contests are deterministic for a given seed. Only one engine job runs at a time.
+  5. submit_design your best design when you're done (or when your runs are used up).
+Refs: "Ant" (example), "MyZook" (your latest version), "MyZook@2". You can test against the
+example Zooks and your own earlier designs. Contests are deterministic for a given seed.
 """
 
 
@@ -50,6 +53,18 @@ def _with_images(summary: dict, previews: dict) -> list:
 def build_server(studio: Studio) -> MCPServer:
     server = MCPServer(name="bamzooki", title="BAMZOOKi Zook lab", instructions=INSTRUCTIONS)
 
+    @server.tool(description="Your task: what to build, how it will be judged, your test-run budget "
+                             "(runs used/left), the opponents you may test against and any submission. "
+                             "Call this first.")
+    def get_challenge() -> str:
+        return _dump(studio.challenge_info())
+
+    @server.tool(description="Submit your final design for the challenge. It plays the official evaluation "
+                             "games (they don't use test runs) and returns your score. Limited submissions "
+                             "(usually one), so submit your best design.")
+    def submit_design(ref: str) -> str:
+        return _dump(studio.submit(ref))
+
     @server.tool(description="How Zooks are built: the part schema with every slider's range and "
                              "meaning, available textures, example Zooks, and design tips. Read this first.")
     def get_design_guide() -> str:
@@ -63,7 +78,7 @@ def build_server(studio: Studio) -> MCPServer:
     def get_contest(contest: str) -> str:
         return _dump(studio.contest(contest))
 
-    @server.tool(description="Example Zooks plus your saved designs (name -> versions) and other models' designs.")
+    @server.tool(description="The Zooks you can use: the example Zooks and your own saved designs (name -> versions).")
     def list_zooks() -> str:
         return _dump(studio.zooks())
 
@@ -99,7 +114,8 @@ def build_server(studio: Studio) -> MCPServer:
     @server.tool(description="Run a contest in the real game (on screen, ~20-90 s) and get the verdict: winner by "
                              "colour and Zook, scores, finish time, distance travelled, falls, the MP4 path, and "
                              "(with video) a 2x2 sheet of stills: Go, halfway, the finish, the end. "
-                             "green/red are Zook refs; single-player contests take only green.")
+                             "green/red are Zook refs (examples or your own designs); single-player "
+                             "contests take only green. Uses one test run; the result shows runs left.")
     def run_contest(contest: str, green: str, red: str | None = None, seed: int = 1, video: bool = True,
                     duration: float = 90.0) -> list:
         r = studio.run(contest, green, red, seed=seed, video=video, duration=duration)
@@ -110,7 +126,8 @@ def build_server(studio: Studio) -> MCPServer:
                              "block_push (cm pushed, 13 s), high_jump (cm, 10 s); or free play in a test "
                              "environment for `duration` seconds: 'free:BoxEnv', 'free:SlopeEnv', 'free:StepEnv', ... "
                              "Returns the trial result as the Zook Kit reports it, speed/drift/height stats and "
-                             "a sheet of stills. Faster than a contest (~10-30 s).")
+                             "a sheet of stills. Faster than a contest (~10-30 s). Uses one test run; the "
+                             "result shows runs left.")
     def run_trial(ref: str, trial: str = "sprint", duration: float = 20.0, video: bool = True) -> list:
         r = studio.trial(ref, trial, duration=duration, video=video)
         return _with_images(r, {"stills (start | 1/3 / 2/3 | end)": r.get("stills")})
@@ -126,11 +143,18 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default=os.environ.get("BAMZOOKI_MODEL", "manual"),
                     help="name of the model using the server (folder for its designs and videos)")
+    ap.add_argument("--challenge", help="challenge TOML (default: bamzooki.toml 'challenge' or "
+                                        "challenges/default.toml)")
+    ap.add_argument("--no-challenge", action="store_true", help="free mode: no task, unlimited runs")
     ap.add_argument("--http", action="store_true", help="serve MCP over HTTP (streamable-http) instead of stdio")
     ap.add_argument("--host", default="127.0.0.1", help="HTTP bind address (keep it local)")
     ap.add_argument("--port", type=int, default=8765)
     a = ap.parse_args(argv)
-    server = build_server(Studio(model=a.model))
+    from ..challenge import Challenge
+    from ..config import load_config
+
+    challenge = None if a.no_challenge else Challenge.load(a.challenge or load_config().challenge)
+    server = build_server(Studio(model=a.model, challenge=challenge))
     if a.http:
         server.run("streamable-http", host=a.host, port=a.port)
     else:

@@ -16,6 +16,7 @@ import threading
 import time
 from pathlib import Path
 
+from .challenge import Challenge, ChallengeState
 from .runner import TRIALS, Engine, Job, contests
 from .runner.contests import RULES
 from .sdk import schema
@@ -28,7 +29,10 @@ GUIDE_PATH = Path(__file__).with_name("docs") / "zook_design_guide.md"
 
 
 class Studio:
-    def __init__(self, model: str = "manual", engine: Engine | None = None):
+    """One model's workspace. The model only sees the example Zooks and its own designs; other
+    models' designs are hidden and can't be referenced. With a challenge, test runs are budgeted."""
+
+    def __init__(self, model: str = "manual", engine: Engine | None = None, challenge: Challenge | None = None):
         self.engine = engine or Engine()
         self.install = self.engine.install
         self.model = safe_name(model, "model")
@@ -37,6 +41,8 @@ class Studio:
         self.lock = threading.Lock()
         self.work = self.install.config.cache_dir / "studio"
         self.work.mkdir(parents=True, exist_ok=True)
+        self.challenge = challenge
+        self.state = ChallengeState(challenge, self.zoo.root / self.model) if challenge else None
 
     # --- reference data ------------------------------------------------------------
     def contests(self) -> list[dict]:
@@ -68,10 +74,14 @@ class Studio:
 
     # --- zooks -----------------------------------------------------------------------
     def zooks(self) -> dict:
-        return {"examples": self.zoo.example_names(), "mine": self.zoo.designs(self.model),
-                "others": {m: self.zoo.designs(m) for m in self.zoo.models() if m != self.model}}
+        """What this model can use: the example Zooks and its own designs (name -> versions)."""
+        return {"examples": self.zoo.example_names(), "mine": self.zoo.designs(self.model)}
 
     def _ref(self, ref: str) -> ZookRef:
+        """Resolve a ref, allowing only example Zooks and this model's own designs."""
+        owner = ref.split("@", 1)[0].split("/", 1)[0] if "/" in ref else None
+        if owner not in (None, "examples", self.model):
+            raise KeyError(f"{ref!r} is not available: use an example Zook or one of your own designs")
         return self.zoo.resolve(ref, self.model)
 
     def get_zook(self, ref: str, include_defaults: bool = False) -> dict:
@@ -172,6 +182,8 @@ class Studio:
         rd = self._ref(red) if red else None
         if info.players == 2 and rd is None:
             return {"error": f"{info.name} needs two Zooks (green and red)"}
+        if self.state and (why := self.state.check("run_contest")):
+            return {"error": why, "budget": self.state.budget()}
         job = Job(info, g.path, rd.path if rd else None, seed=seed, duration=duration, video=video,
                   record=record, model=self.model)
         with self.lock:
@@ -200,7 +212,18 @@ class Studio:
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"kind": "contest", **summary}) + "\n")
+        vs = rd.label if rd else "-"
+        self._spend("run_contest", f"{info.name}: {g.label} vs {vs} seed {seed}", summary,
+                    r.status in ("finished", "timeout"))
         return summary
+
+    def _spend(self, tool: str, detail: str, out: dict, counted: bool) -> None:
+        """Count a test run against the challenge budget (failed engine runs are free)."""
+        if not self.state:
+            return
+        if counted:
+            self.state.spend(tool, detail)
+        out["budget"] = self.state.budget()
 
     def _sheet(self, video: Path, times: list[float]) -> Path | None:
         from .runner.video import VideoError, contact_sheet
@@ -214,6 +237,8 @@ class Studio:
         """Run a Zook Kit trial (sprint, hurdles, lap, block_push, high_jump) or free play in an
         environment ("free:SlopeEnv") on its own. Quicker feedback than a contest."""
         r = self._ref(ref)
+        if self.state and (why := self.state.check("run_trial")):
+            return {"error": why, "budget": self.state.budget()}
         with self.lock:
             res = self.engine.trial(r.path, r.name, trial, duration=duration, video=video, model=self.model)
         sheet = None
@@ -228,7 +253,56 @@ class Studio:
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"kind": "trial", **out}) + "\n")
+        self._spend("run_trial", f"{trial}: {r.label}", out, res["status"] in ("finished", "timeout"))
         return out
+
+    # --- challenge -----------------------------------------------------------------------
+    def challenge_info(self) -> dict:
+        if not self.challenge:
+            return {"challenge": None, "note": "No challenge configured: test runs are unlimited."}
+        return {**self.challenge.describe(), "budget": self.state.budget(),
+                "allowed_opponents": {"examples": self.zoo.example_names(),
+                                      "your_designs": self.zoo.designs(self.model)},
+                "submitted": self.state.data["submissions"]}
+
+    def submit(self, ref: str) -> dict:
+        """Play the challenge's evaluation games with this design (not counted against the budget)."""
+        if not self.challenge:
+            return {"error": "No challenge configured."}
+        if why := self.state.can_submit():
+            return {"error": why}
+        mine = self._ref(ref)
+        if mine.owner != self.model:
+            return {"error": "Submit one of your own designs."}
+        games = []
+        for g in self.challenge.matches():
+            # Opponents come from the operator's challenge file, so any Zook may be named there
+            # ("Spider" = an example, "<model>/<Name>@n" = a saved design).
+            name = g["opponent"]
+            opp = self.zoo.resolve(name if "/" in name else f"examples/{name}")
+            info = contests.find(g["contest"], self.install)
+            green, red = (mine, opp) if g["side"] == "green" else (opp, mine)
+            if info.players == 1:
+                green, red = mine, None
+            job = Job(info, green.path, red.path if red else None, seed=g["seed"], video=True, model=self.model)
+            with self.lock:
+                r = self.engine.run(job, name=f"eval-{info.contest_file}")
+            games.append({**g, "status": r.status, "winner": r.winner, "won": r.winner == g["side"],
+                          "scores": r.scores,
+                          "finish_after_go_s": None if r.finish_time is None else round(r.finish_time, 2),
+                          "video": str(r.video) if r.video else None})
+        wins = sum(1 for g in games if g["won"])
+        draws = sum(1 for g in games if g["winner"] is None)
+        points = wins + self.challenge.draw_points * draws
+        entry = {"design": mine.label, "score": round(points / len(games), 3) if games else 0.0, "wins": wins,
+                 "draws": draws, "losses": len(games) - wins - draws, "games": len(games), "results": games,
+                 "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+        self.state.record_submission(entry)
+        log = self.zoo.root / self.model / "results.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"kind": "submission", **entry}) + "\n")
+        return entry
 
     def results(self, limit: int = 20) -> list[dict]:
         log = self.zoo.root / self.model / "results.jsonl"

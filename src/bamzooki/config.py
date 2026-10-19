@@ -27,6 +27,7 @@ _ENV = {
     "cache_dir": "BAMZOOKI_CACHE_DIR",
     "render_dir": "BAMZOOKI_RENDER_DIR",
     "zoo_dir": "BAMZOOKI_ZOO_DIR",
+    "challenge": "BAMZOOKI_CHALLENGE",
 }
 
 
@@ -38,6 +39,7 @@ class Config:
     cache_dir: Path = REPO_ROOT / ".cache" / "bamzooki"
     render_dir: Path = REPO_ROOT / "renders"  # MP4s: <render_dir>/<model>/<timestamp>_....mp4
     zoo_dir: Path = REPO_ROOT / "zooks"  # model designs: <zoo_dir>/<model>/<Name>/<n>.0.zook
+    challenge: Path | None = None  # challenge TOML (None = challenges/default.toml)
     source: Path | None = None  # config file that was read, if any
 
 
@@ -76,6 +78,8 @@ def load_config() -> Config:
         cfg.render_dir = _resolve(v, base)
     if v := raw.get("zoo_dir"):
         cfg.zoo_dir = _resolve(v, base)
+    if v := raw.get("challenge"):
+        cfg.challenge = _resolve(v, base)
     if v := raw.get("wine_command"):
         cfg.wine_command = shlex.split(v) if isinstance(v, str) else list(v)
     return cfg
