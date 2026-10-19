@@ -1,0 +1,11 @@
+repos:
+  - repo: local
+    hooks:
+      - id: asset-guard
+        name: no game files or derived keys
+        # Checks staged files for game file types, Bonsai archives and (when an
+        # install is configured) the derived Zook password / registry key / he.skx.
+        entry: python tools/check_assets.py
+        language: python
+        additional_dependencies: ["cryptography>=42"]
+        pass_filenames: true
