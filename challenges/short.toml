@@ -1,0 +1,37 @@
+# Default challenge for a model designing Zooks. Copy this file to make your own and point to it
+# with `challenge = "challenges/<file>.toml"` in bamzooki.toml, BAMZOOKI_CHALLENGE, or
+# `python -m bamzooki.mcp_server --challenge <file>`.
+
+name = "short"
+title = "Beat Spider at Sumo (short test)"
+description = """
+Design a Zook that beats Spider, the game's best example Zook, at Zook Sumo: push it off the
+raised round table (or survive while it falls off) without leaving the table yourself.
+
+You have a limited number of test runs. Each test run is exactly ONE game, and you choose it:
+- run_trial: one of the Zook Kit's trials for one of your Zooks (e.g. "sprint" to check it walks
+  forwards, "block_push" to measure pushing power), or
+- run_contest: one contest, with the two Zooks and the seed given as arguments. The opponent can
+  be any example Zook (Spider, Ant, Leapsa, Scrabber, Twigger, Wormthing) or one of your own
+  earlier designs (e.g. green="MyZook@3", red="MyZook@2").
+Choosing which games to play, against whom, is your testing strategy. Saving and previewing
+designs is free and doesn't use runs.
+
+When you're done, call submit_design once with your best design. It plays the single
+evaluation game below (it doesn't use a test run): a win scores 1, a draw 0.5, a loss 0.
+"""
+
+[budget]
+runs = 3                                 # test runs (one game each) per model; 0 = unlimited
+counts = ["run_contest", "run_trial"]    # tools that use a run
+submissions = 1                          # how often submit_design may be called
+
+[scoring]
+draw = 0.5                               # a game with no winner (e.g. time limit) is worth half a win
+
+# The one official game played by submit_design. side = the submitted Zook's arena colour.
+[evaluation]
+contest = "Zook Sumo"
+opponent = "Spider"
+seed = 1
+side = "green"
