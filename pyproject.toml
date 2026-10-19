@@ -21,9 +21,13 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+bamzooki = ["runner/lua/*.lua"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not engine'"
 markers = [
     "install: needs a configured BAMZOOKi install (skipped otherwise)",
+    "engine: launches Bonsai.exe on screen (opt-in: pytest -m engine)",
 ]
