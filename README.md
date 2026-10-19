@@ -10,6 +10,59 @@ runner with verdicts, video and replays, an MCP server for models (with challeng
 budgets), and an **arena** in which any OpenRouter model takes the challenge while you watch
 and chat with it.
 
+## Quickstart: let OpenRouter models compete
+
+You need BAMZOOKi installed (see [Bring your own copy](#bring-your-own-copy-no-bbc-files-or-keys-in-this-repo)),
+Python 3.11+, ffmpeg on PATH (for videos), and an [OpenRouter](https://openrouter.ai) API key.
+
+**1. One-time setup** (Windows shown; see [Setup](#setup) for details and other systems)
+
+```
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -e ".[dev]"
+copy bamzooki.example.toml bamzooki.toml
+echo OPENROUTER_API_KEY=sk-or-...your key...> .env
+```
+
+`bamzooki.toml` works as-is on a default Windows install. `.env` is gitignored, and the key is
+never printed or logged. Optionally copy your own BAMZOOKi manual PDF to
+`Model Instructions/BAMZOOKi Manual.pdf` so models can read it with `read_manual`.
+
+**2. Start the arena, naming the models to call** (any OpenRouter model id that supports tool
+calling, from [openrouter.ai/models](https://openrouter.ai/models)):
+
+```
+.venv\Scripts\python.exe tools\arena.py --challenger anthropic/claude-sonnet-4.5 --challenger openai/gpt-5
+```
+
+**3. At the `you>` prompt**
+
+| Type | What happens |
+|---|---|
+| `/next` | Calls the next challenger. It plays the whole challenge on screen, then presents its Zook, design and testing strategy. |
+| `/challenger <id>` | Calls any model now, e.g. `/challenger google/gemini-2.5-pro` |
+| anything else | Talks to the current model, e.g. "why four legs?" |
+| `/leaderboard` | Everyone's result so far |
+| `/open` | Plays the current model's latest video |
+| `/status` | The current model's runs left |
+| `/list`, `/help`, `/quit` | The queue, the commands, leave |
+
+Tips:
+- **Leave the BAMZOOKi window in front while a game plays, and don't close it.** The game only runs
+  while its window has focus.
+- The default challenge is "Beat Spider at Sumo" with 20 test runs. For a quick show, add
+  `--challenge challenges/short.toml` (3 runs).
+- To skip typing the models, list them in `bamzooki.toml`:
+  `[arena]` → `challengers = ["anthropic/claude-sonnet-4.5", "openai/gpt-5"]`, then run
+  `tools\arena.py` and use `/next`.
+- Results land outside the repo in `~/BAMZOOKi Arena/` (`Zook Entries/<model>/`, `Renders/<model>/`,
+  `Transcripts/<model>/`).
+- Each model gets one attempt per challenge. Let one try again with
+  `.venv\Scripts\python.exe tools\challenge.py reset --model <id> --challenge challenges/short.toml`.
+- Token use and cost are printed after each reply.
+
+Full details are in [The arena](#the-arena-models-compete-openrouter) below.
+
 ## Bring your own copy: no BBC files or keys in this repo
 
 This repository contains **no** game binaries, scripts, Zooks, meshes, textures, encryption
