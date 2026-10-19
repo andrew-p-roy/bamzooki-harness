@@ -131,3 +131,11 @@ def test_genome_roundtrip_examples(install):
     for p in install.example_zooks():
         text = archive.decode(p.read_bytes(), install.zook_key)[1].decode("latin-1")
         assert genome.dumps(genome.loads(text)) == text, p
+
+
+def test_wave_param_roundtrip():
+    s = spec(leg(around=180, movement={"wave": 0.3, "phase": 0.2}))
+    z = Zook.from_spec(s)
+    (child,) = z.root_part.findall("bodysolid")
+    assert child.attrs["spine_amplitude"] == "0.3"
+    assert z.to_spec()["body"]["children"][0]["movement"]["wave"] == 0.3

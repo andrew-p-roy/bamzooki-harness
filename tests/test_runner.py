@@ -126,3 +126,34 @@ def test_catalog(install):
     assert len(cat) >= 12
     assert cat["Zook Sumo"].players == 2 and set(cat["Zook Sumo"].colours) == {"green", "red"}
     assert contests.find("cp_zook_sumo", install).name == "Zook Sumo"
+
+
+def test_track_stats_forward_is_minus_z():
+    from bamzooki.runner import _track_stats
+
+    track = [(0.0, 0, 1, 0), (3.0, 0, 1, 0), (5.0, 0, 1, -10), (7.0, 1, 1, -20)]
+    m = _track_stats(track, go_time=3.0)["moved"]
+    assert m["forward_units"] == 20 and m["forward_cm_per_s"] == 20.0  # 20 units * 4 cm / 4 s
+    assert not m["fell"] and abs(m["drift_deg"]) < 5
+    assert _track_stats([(0, 0, 0, 0)], 3.0) == {"moved": None}
+
+
+def test_contact_sheet(tmp_path):
+    import shutil
+
+    from bamzooki.runner.video import contact_sheet, frames_to_mp4
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    for k in range(50):
+        (tmp_path / f"frame_{k:06d}.hex").write_text("08080800" + "0020" + "0020" + f"{k * 5:02x}0000" * 1024)
+    mp4 = frames_to_mp4(tmp_path, tmp_path / "t.mp4", fps=25)
+    sheet = contact_sheet(mp4, [0, 0.5, 1.0, 99], tmp_path / "s.png", width=256)
+    assert sheet.stat().st_size > 0
+
+
+def test_trials_table():
+    from bamzooki.runner import TRIALS
+
+    assert TRIALS["sprint"] == ("SprintEnv", 20.0) and set(TRIALS) == {"sprint", "hurdles", "lap", "block_push",
+                                                                       "high_jump"}

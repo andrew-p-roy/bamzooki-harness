@@ -290,8 +290,17 @@ Remaining:
 - [x] `Studio(model)`: the design guide (schema + textures + tips), contests with plain-language rules (`runner.contests.RULES`, our wording from each behaviour graph), Zook listing, `get_zook` (spec + stats), `validate`, `save_zook` (validate → draft → finalise in the engine → previews → store), `edit_zook` (edit ops → new version), `preview`, `run` (verdict, winning Zook, scores, finish time, falls, distance travelled, MP4), and `results` (`zooks/<model>/results.jsonl`). Engine jobs are serialised with a lock.
 - [x] MCP server (`python -m bamzooki.mcp_server --model <name>`, stdio; MCP Python SDK 2.x `MCPServer`). Tools: `get_design_guide`, `list_contests`, `get_contest`, `list_zooks`, `get_zook`, `validate_zook`, `save_zook`, `edit_zook`, `preview_zook`, `run_contest`, `list_results`. `save_zook`/`edit_zook`/`preview_zook` return preview images as MCP image content (vision feedback). Verified over stdio with the MCP client.
 - [x] End-to-end check: a quadruped designed from scratch as a spec (blue spotted body, mirrored alternating legs) was finalised, previewed, and ran 40 s of Sumo against Ant (it walked 34.5 units, neither Zook fell, no winner by the time limit).
-- [ ] A "walk test" tool (express on flat ground, measure speed and heading) for quicker feedback than a full contest.
-- [ ] Optional: `IK` path editing (`movement.ik_points` is read and written, but the guide doesn't explain it yet).
+- [x] **Trials** (`Engine.trial`, `run_trial`): the Zook Kit's own Test-mode trials driven without its UI (Lua `HarnessTrial`). It uses the same plumbing as the Builder:
+  1. a `ClickableTarget` registered as Config `BuilderTarget`;
+  2. the trial environment (`SprintEnv`, `Hurdles`, `Lap`, `BlockPush`, `HighJump`) created with `(nil, 130, 130, Quatn)`;
+  3. `BuilderParts.Express` at the environment's `StartPosition`;
+  4. `ReportEvent(env, creature, "StopWatch")` right after expressing (HighJump measures from creation) and again at Go;
+  5. the environment calls back `StopWatch` and `AddDetail("Achievement", "Trial: …", value, unit)`.
+
+  Results match the Zook Kit's stored passport values (Spider sprint 54.9 = 54.9 cm/s, Twigger 10.3 vs 10.4, Spider lap 18.2 = 18.2 s). Free play in any `*Env` (`free:SlopeEnv`, …) is also available. Trials return forward speed, drift, height range and falls, plus stills.
+- [x] **Stills for vision models:** contests and trials with video return a 2×2 contact sheet (contest: Go, halfway, the finish, the end).
+- [x] **Design guide for models** (`src/bamzooki/docs/zook_design_guide.md`, served by `get_design_guide`): units and weight, attachment geometry, joints and muscles, the stride cycle, single and double stride paths (`ik_points`: semantics read from `Evo.UpdateOneLink`/`UpdateTwoLink`), steering (`turn_sharpness` → minimum amplitude 1 − 2s, `turn_smoothness` → angle 180·s), targeting, body wave (`movement.wave` = legacy `spine_amplitude`, now exposed), gait recipes, what wins, and the test loop. The stride-direction advice was verified (a hexapod walked backwards, then forwards with the path's x flipped).
+- [x] Local HTTP endpoint: `python -m bamzooki.mcp_server --model X --http` (streamable-http, `127.0.0.1:8765/mcp`), verified with the MCP HTTP client.
 
 ### M5: Competitions & search (later)
 - [ ] Tournaments between models across the 12 contests, with Elo ratings, saved replays and videos.

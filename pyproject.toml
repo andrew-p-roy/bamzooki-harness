@@ -23,7 +23,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-bamzooki = ["runner/lua/*.lua"]
+bamzooki = ["runner/lua/*.lua", "docs/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

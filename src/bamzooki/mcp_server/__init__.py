@@ -1,6 +1,7 @@
 """MCP server: lets a model design BAMZOOKi Zooks and test them in the real game (M4).
 
-    python -m bamzooki.mcp_server --model claude-opus-5-5        # stdio transport
+    python -m bamzooki.mcp_server --model claude-opus-5-5        # stdio (the client starts it)
+    python -m bamzooki.mcp_server --model my-agent --http        # local endpoint http://127.0.0.1:8765/mcp
 
 The model name decides where its designs (zooks/<model>/) and videos (renders/<model>/) go.
 Every engine-backed tool (save/edit/preview Zooks, run contests) launches the game on screen
@@ -25,8 +26,9 @@ runs on the user's screen. Typical loop:
   2. get_zook an example ("Ant", "Spider", ...) to see a working design.
   3. save_zook your design (JSON spec). The game's own Zook Kit code lays it out, clamps
      out-of-range values, computes its size/weight, and you get preview images back.
-  4. run_contest it against an example or another design; read the verdict, scores, how far
-     each Zook travelled and whether it fell. Iterate with edit_zook.
+  4. run_trial it (sprint, hurdles, lap, block_push, high_jump: the Zook Kit's own tests, ~10-30 s)
+     to check it walks, then run_contest it against an example or another design; read the
+     verdict, scores, distance travelled, falls, and look at the stills. Iterate with edit_zook.
 Refs: "Ant" (example), "MyZook" (your latest version), "MyZook@2", "<model>/<Name>".
 Contests are deterministic for a given seed. Only one engine job runs at a time.
 """
@@ -95,11 +97,23 @@ def build_server(studio: Studio) -> MCPServer:
         return _with_images({k: v for k, v in r.items() if k != "previews"}, r.get("previews"))
 
     @server.tool(description="Run a contest in the real game (on screen, ~20-90 s) and get the verdict: winner by "
-                             "colour and Zook, scores, finish time, distance travelled, falls, and the MP4 path. "
+                             "colour and Zook, scores, finish time, distance travelled, falls, the MP4 path, and "
+                             "(with video) a 2x2 sheet of stills: Go, halfway, the finish, the end. "
                              "green/red are Zook refs; single-player contests take only green.")
     def run_contest(contest: str, green: str, red: str | None = None, seed: int = 1, video: bool = True,
-                    duration: float = 90.0) -> str:
-        return _dump(studio.run(contest, green, red, seed=seed, video=video, duration=duration))
+                    duration: float = 90.0) -> list:
+        r = studio.run(contest, green, red, seed=seed, video=video, duration=duration)
+        return _with_images(r, {"stills (Go | halfway / finish | end)": r.get("stills")})
+
+    @server.tool(description="Test one Zook on its own with the Zook Kit's built-in trials (the Test tool): "
+                             "sprint (cm/s over 50 units, 20 s), hurdles (cm/s, 20 s), lap (s per lap, 60 s), "
+                             "block_push (cm pushed, 13 s), high_jump (cm, 10 s); or free play in a test "
+                             "environment for `duration` seconds: 'free:BoxEnv', 'free:SlopeEnv', 'free:StepEnv', ... "
+                             "Returns the trial result as the Zook Kit reports it, speed/drift/height stats and "
+                             "a sheet of stills. Faster than a contest (~10-30 s).")
+    def run_trial(ref: str, trial: str = "sprint", duration: float = 20.0, video: bool = True) -> list:
+        r = studio.trial(ref, trial, duration=duration, video=video)
+        return _with_images(r, {"stills (start | 1/3 / 2/3 | end)": r.get("stills")})
 
     @server.tool(description="Your most recent contest results (newest last).")
     def list_results(limit: int = 20) -> str:
@@ -112,6 +126,12 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default=os.environ.get("BAMZOOKI_MODEL", "manual"),
                     help="name of the model using the server (folder for its designs and videos)")
-    ap.add_argument("--transport", choices=["stdio", "streamable-http"], default="stdio")
+    ap.add_argument("--http", action="store_true", help="serve MCP over HTTP (streamable-http) instead of stdio")
+    ap.add_argument("--host", default="127.0.0.1", help="HTTP bind address (keep it local)")
+    ap.add_argument("--port", type=int, default=8765)
     a = ap.parse_args(argv)
-    build_server(Studio(model=a.model)).run(a.transport)
+    server = build_server(Studio(model=a.model))
+    if a.http:
+        server.run("streamable-http", host=a.host, port=a.port)
+    else:
+        server.run("stdio")

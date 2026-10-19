@@ -90,6 +90,10 @@ PARAMS: tuple[Param, ...] = (
           help="maximum targeting angle in degrees"),
     Param("movement", "target_angle", "min_spine_target_angle", 180.0, 0, 180, where="child",
           help="targeting cone in degrees"),
+    Param("movement", "wave", "spine_amplitude", 0.0, 0, 1, where="child",
+          help="body-wave amplitude: the joint sways side to side in time with the stride (phase = "
+               "movement.phase); chain several waving parts with staggered phases for a slithering worm. "
+               "Not in the Zook Kit's UI but supported by the engine (used by Series-1 Zooks)"),
     Param("movement", "stiffness", "muscle_stiffness", 1000.0, 1, 10000, where="child", help="joint muscle stiffness"),
     Param("movement", "damping", "muscle_damping", 1000.0, 1, 10000, where="child", help="joint muscle damping"),
     # Master IK Control (root only)
@@ -112,7 +116,7 @@ TOP_LEVEL = ("name", "mesh", "size", "shape", "attach", "rotate", "movement", "g
 MANAGED = {"posx", "posy", "posz", "partId", "segment", "mirror_group", "name", "mesh", "colour",
            *COLOUR_ATTRS, "powered", "moveable", "IKspeed", "minAmplitude", "minAngle"}
 # Older attributes some Zooks carry; preserved untouched (spec key "legacy").
-LEGACY = ("spine_amplitude", "spine_interval", "spine_phase", "side", "damping")
+LEGACY = ("spine_interval", "spine_phase", "side", "damping")
 MAX_NAME = 25  # Zook Kit limit for Zook names
 
 

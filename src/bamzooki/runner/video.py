@@ -79,6 +79,33 @@ def hex_to_png(hex_file: Path, png: Path, ffmpeg: str | None = None) -> Path:
     return png
 
 
+def video_duration(mp4: Path, ffmpeg: str | None = None) -> float:
+    probe = Path(find_ffmpeg(ffmpeg)).with_name("ffprobe" + Path(find_ffmpeg(ffmpeg)).suffix)
+    res = subprocess.run([str(probe if probe.exists() else "ffprobe"), "-v", "error", "-show_entries",
+                          "format=duration", "-of", "csv=p=0", str(mp4)], capture_output=True, text=True)
+    return float(res.stdout.strip() or 0)
+
+
+def contact_sheet(mp4: Path, times: list[float], out: Path, width: int = 1024, ffmpeg: str | None = None) -> Path:
+    """One PNG with up to four stills from a video in a 2x2 grid (left-right, top-bottom)."""
+    exe = find_ffmpeg(ffmpeg)
+    dur = video_duration(mp4, ffmpeg)
+    times = [min(max(0.0, t), max(0.0, dur - 0.05)) for t in times][:4]
+    while len(times) < 4:
+        times.append(times[-1] if times else 0.0)
+    cmd = [exe, "-y", "-loglevel", "error"]
+    for t in times:
+        cmd += ["-ss", f"{t:.2f}", "-i", str(mp4)]
+    half = width // 2
+    scale = "".join(f"[{i}:v]trim=end_frame=1,scale={half}:-2[v{i}];" for i in range(4))
+    cmd += ["-filter_complex", scale + "[v0][v1][v2][v3]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0[out]",
+            "-map", "[out]", "-frames:v", "1", "-update", "1", str(out)]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        raise VideoError(f"ffmpeg failed: {res.stderr.strip()[-300:]}")
+    return out
+
+
 def frames_to_mp4(frames_dir: Path, out: Path, fps: float, ffmpeg: str | None = None, crf: int = 20,
                   keep_frames: bool = False) -> Path:
     frames = frame_files(frames_dir)

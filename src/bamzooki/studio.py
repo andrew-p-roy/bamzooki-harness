@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from .runner import Engine, Job, contests
+from .runner import TRIALS, Engine, Job, contests
 from .runner.contests import RULES
 from .sdk import schema
 from .sdk.store import Zoo, ZookRef, safe_name
@@ -24,29 +24,7 @@ from .sdk.zook import SpecError, Zook, apply_edits, validate_spec
 
 DEFAULT_VIEWS = ("three_quarter", "front", "top")
 
-DESIGN_GUIDE = """\
-A Zook is a tree of body parts. The root part ("body") is the torso; every other part is
-attached to its parent's surface ("attach": elevation/around in degrees: around 0 = the
-parent's front, +90/-90 = its sides, 180 = back; elevation negative = upper half, positive =
-lower half), then oriented ("rotate"; positive up_down tilts the part downwards). Every part
-is a Blob, shaped with pointiness, flatten_end, flatten_side and squareness (1 = box-like),
-sized 0.1..3 per axis. (The Zook Kit's Cube/Sphere meshes don't work in contests.)
-
-Movement: a part with movement.type "single" swings through a stride path; "double" makes it
-and its parent bend as a two-part limb (the parent must not be the root and must not move
-itself). Legs on opposite sides usually alternate: give a mirrored leg "mirror_phase" =
-phase + 0.5 (wrapped to 0..1). Root "gait.cycle_speed" sets how fast strides cycle;
-turn_sharpness/turn_smoothness tune steering. Parts with movement.targeting "Normal" turn
-towards the contest's target. Joint stiffness/damping (1..10000) set how firmly limbs hold.
-
-"mirror": true adds a mirrored twin on the other side (needs around != 0); its children are
-mirrored too. Mass comes from part sizes; very large or long parts make a Zook heavy and
-unstable. Contests steer Zooks towards targets; the Zook faces +z (the root's front).
-
-Workflow: get_zook an example for reference -> save_zook a design (it is validated, laid out
-by the game's own Zook Kit code, and photographed) -> look at the previews -> run_contest.
-Out-of-range sliders are clamped by the game and reported. Results are repeatable for a seed.
-"""
+GUIDE_PATH = Path(__file__).with_name("docs") / "zook_design_guide.md"
 
 
 class Studio:
@@ -82,8 +60,10 @@ class Studio:
         return sorted(names)
 
     def design_guide(self) -> dict:
-        return {"guide": DESIGN_GUIDE, "schema": schema.describe(), "textures": self.textures(),
+        return {"guide": GUIDE_PATH.read_text(encoding="utf-8"), "schema": schema.describe(), "textures": self.textures(),
                 "example_zooks": self.zoo.example_names(),
+                "trials": {k: {"environment": v[0], "time_limit_s": v[1]} for k, v in TRIALS.items()},
+                "free_play_environments": self.engine.environments(),
                 "edit_ops": "edit_zook takes [{op: set|add|remove, path: 'body.children[0].size.width', value}]"}
 
     # --- zooks -----------------------------------------------------------------------
@@ -197,6 +177,12 @@ class Studio:
         with self.lock:
             r = self.engine.run(job, name=info.contest_file)
         v = r.verdict
+        sheet = None
+        if r.video:
+            # Stills: Go (video starts 1 s before), halfway to the finish, the finish, the end.
+            fin = r.finish_time if r.finish_time is not None else None
+            times = [1.0, 1.0 + (fin or 10) / 2, 1.0 + (fin if fin is not None else 20), 1e9]
+            sheet = self._sheet(r.video, times)
         summary = {
             "contest": info.name, "green": g.label, "red": rd.label if rd else None, "seed": seed,
             "status": r.status, "winner": r.winner,
@@ -205,15 +191,44 @@ class Studio:
             "finish_after_go_s": None if r.finish_time is None else round(r.finish_time, 2),
             "fell": v.fell if v else {}, "notes": v.notes if v else [],
             "travel": _travel(r.trajectories()),
-            "video": str(r.video) if r.video else None, "replay": str(r.replay) if r.replay else None,
+            "video": str(r.video) if r.video else None, "stills": str(sheet) if sheet else None,
+            "replay": str(r.replay) if r.replay else None,
             "run_dir": str(r.run_dir), "error": r.error,
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         log = self.zoo.root / self.model / "results.jsonl"
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(summary) + "\n")
+            f.write(json.dumps({"kind": "contest", **summary}) + "\n")
         return summary
+
+    def _sheet(self, video: Path, times: list[float]) -> Path | None:
+        from .runner.video import VideoError, contact_sheet
+
+        try:
+            return contact_sheet(Path(video), times, Path(video).with_name(Path(video).stem + "_stills.png"))
+        except VideoError:
+            return None
+
+    def trial(self, ref: str, trial: str = "sprint", duration: float = 20.0, video: bool = True) -> dict:
+        """Run a Zook Kit trial (sprint, hurdles, lap, block_push, high_jump) or free play in an
+        environment ("free:SlopeEnv") on its own. Quicker feedback than a contest."""
+        r = self._ref(ref)
+        with self.lock:
+            res = self.engine.trial(r.path, r.name, trial, duration=duration, video=video, model=self.model)
+        sheet = None
+        if res.get("video"):
+            d = (res.get("moved") or {}).get("seconds") or duration
+            sheet = self._sheet(res["video"], [0.5, 3 + d / 3, 3 + 2 * d / 3, 1e9])
+        out = {"zook": r.label, "trial": trial, "status": res["status"], "result": res.get("result"),
+               "moved": res.get("moved"), "video": str(res["video"]) if res.get("video") else None,
+               "stills": str(sheet) if sheet else None, "run_dir": str(res["run_dir"]), "error": res.get("error"),
+               "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+        log = self.zoo.root / self.model / "results.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"kind": "trial", **out}) + "\n")
+        return out
 
     def results(self, limit: int = 20) -> list[dict]:
         log = self.zoo.root / self.model / "results.jsonl"

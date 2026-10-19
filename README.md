@@ -103,10 +103,25 @@ claude mcp add bamzooki -- <repo>/.venv/Scripts/python.exe -m bamzooki.mcp_serve
 ```
 
 For Claude Desktop, add the same command to `claude_desktop_config.json` under `mcpServers`.
+With stdio the client starts the server itself, so there is nothing else to run. For other agents
+or frameworks there is a **local HTTP endpoint** instead:
+
+```sh
+python -m bamzooki.mcp_server --model my-agent --http          # http://127.0.0.1:8765/mcp
+```
+
 Tools: `get_design_guide`, `list_contests`, `get_contest`, `list_zooks`, `get_zook`,
-`validate_zook`, `save_zook`, `edit_zook`, `preview_zook`, `run_contest`, `list_results`.
-The game window appears whenever a tool needs the engine (save/preview: a few seconds;
-contest: up to a minute or so).
+`validate_zook`, `save_zook`, `edit_zook`, `preview_zook`, `run_trial`, `run_contest`,
+`list_results`. Results come straight back in the tool response (the verdict, scores, distance
+travelled, falls, plus a 2×2 sheet of stills for vision models) and are logged to
+`zooks/<model>/results.jsonl`. The game window appears whenever a tool needs the engine
+(save/preview: a few seconds; trial: 10–30 s; contest: up to about a minute and a half). If your
+client times out long tool calls, raise its limit (Claude Code: `MCP_TOOL_TIMEOUT`, in ms).
+
+The model-facing design guide is `src/bamzooki/docs/zook_design_guide.md`, also served by
+`get_design_guide`. It covers how parts attach and point, joints, the stride cycle and paths
+(single/double), steering, targeting, body waves, gait recipes, what wins each kind of
+contest, and the testing loop.
 
 Designs are kept per model in `zooks/<model>/<Name>/<n>.0.zook` with a `.json` (spec, stats,
 notes) and preview PNGs; results append to `zooks/<model>/results.jsonl`. `zooks/` is

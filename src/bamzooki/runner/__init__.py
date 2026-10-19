@@ -35,6 +35,9 @@ CLASSES = ["AIHarnessDriver"]  # governor classes, defined at runtime by boot.lu
 # inside worlds), so prepare() encrypts these into the sandbox.
 WORLD_CLASSES = ["HarnessCamera", "HarnessBuilder"]
 PREVIEW_VIEWS = ("three_quarter", "front", "left", "top", "back", "right")
+# The Zook Kit's Test-mode trials: name -> (environment agent, time limit in sim seconds).
+TRIALS = {"sprint": ("SprintEnv", 20.0), "hurdles": ("Hurdles", 20.0), "lap": ("Lap", 60.0),
+          "block_push": ("BlockPush", 13.0), "high_jump": ("HighJump", 10.0)}
 # Client area of the engine's default 900x700 window (the camera re-fits to the real area anyway).
 DEFAULT_CLIENT = (884, 662)
 
@@ -49,6 +52,9 @@ VIEWS = {
     # The game's main overview camera ("camera1": whole arena from high up).
     "overview": {"zook": -1, "target": table.Vec(0, 0, 0), "offset": table.Vec(-200, 120, 200), "angle": 18,
                  "min_angle": 10},
+    # One Zook (trials): follow the green/only Zook from above and behind its start side.
+    "chase": {"zook": 1, "target": table.Vec(0, 0, 0), "offset": table.Vec(8, 11, 26), "angle": 45,
+              "min_angle": 30},
     # Chase cams (the game's small views 3 and 4).
     "green": {"zook": 1, "target": table.Vec(0, 0, 0), "offset": table.Vec(5, 14, 40), "angle": 45, "min_angle": 10},
     "red": {"zook": 5, "target": table.Vec(0, 0, 0), "offset": table.Vec(5, 14, 40), "angle": 45, "min_angle": 10},
@@ -297,6 +303,67 @@ class Engine:
             results.append(info)
         return results
 
+    # --- trials (the Zook Kit's Test mode) ------------------------------------------------
+    def trial(self, zook: Path, name: str, trial: str = "sprint", duration: float = 20.0, video: bool = False,
+              view: str | dict = "chase", model: str | None = None, fps: float = 25.0,
+              timeout: float | None = None, focus: str = "idle") -> dict:
+        """Run one of the Zook Kit's trials (TRIALS) or free play in an environment ("free:BoxEnv")
+        for `duration` sim seconds. Returns the trial's own result (as the Zook Kit reports it
+        in the passport), the track, distance/height stats and optionally an MP4."""
+        from .video import VideoError, frames_to_mp4, render_path
+
+        if trial.startswith("free:"):
+            env, is_trial, limit = trial.split(":", 1)[1], False, duration
+        elif trial in TRIALS:
+            env, limit = TRIALS[trial]
+            is_trial = True
+        else:
+            raise KeyError(f"unknown trial {trial!r}; trials: {', '.join(TRIALS)}, or free:<Env> "
+                           f"({', '.join(self.environments())})")
+        self.prepare()
+        self.write_video_cfg(None)
+        started = datetime.now()
+        run_dir = self.runs / f"{started.strftime('%Y%m%d-%H%M%S')}-trial-{trial.replace(':', '-')}"
+        frames_dir = run_dir / "frames"
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        go_time = 3.0
+        spec = {
+            "driver": "HarnessTrial", "classes": {1: "HarnessTrial"}, "camera": 3,
+            "zook": _posix(zook), "name": name, "env": env, "trial": 1 if is_trial else 0,
+            "go_time": go_time, "max_time": limit + (5.0 if is_trial else 0.0),
+            "texture_dir": _posix(self.root / "NewTeam" / "Textures"),
+            "view": view_spec(view), "window_w": DEFAULT_CLIENT[0], "window_h": DEFAULT_CLIENT[1],
+            "capture": 1 if video else 0, "capture_dir": _posix(frames_dir), "capture_fps": fps,
+            "update_interval": 0.1, "track_interval": 0.5,
+            "window_title": f"BAMZOOKi harness - trial {trial} - {name}",
+            "out": _posix(run_dir / "result.dat"), "log": _posix(run_dir / "trial_log.txt"),
+            "boot_log": _posix(run_dir / "boot_log.txt"),
+        }
+        (run_dir / "job.dat").write_text(table.dumps(spec), encoding="latin-1")
+        args = ["-init", BOOT_NAME, "-videocfg", VIDEO_CFG,
+                "-script", _posix(LUA_DIR / "boot.lua"), "-job", _posix(run_dir / "job.dat")]
+        status, error, wall = self._launch(args, timeout or 60 + 2 * (go_time + limit), focus)
+        out = run_dir / "result.dat"
+        raw = table.loads(out.read_text("latin-1")) if out.exists() else {}
+        res = {"trial": trial, "zook": name, "status": raw.get("status", status), "error": error,
+               "result": raw.get("result"), "run_dir": run_dir, "wall_time": wall, "video": None}
+        track = [(s["t"], s["p"]["x"], s["p"]["y"], s["p"]["z"]) for k, s in sorted(raw.get("track", {}).items())
+                 if s.get("p")]
+        res.update(_track_stats(track, go_time))
+        if video and any(frames_dir.iterdir()):
+            try:
+                res["video"] = frames_to_mp4(frames_dir, render_path(self.render_dir, model or default_model(),
+                                                                     [f"trial-{trial.replace(':', '-')}", name], started), fps)
+            except VideoError as e:
+                res["error"] = f"{error or ''}\nvideo: {e}".strip()
+        return res
+
+    def environments(self) -> list[str]:
+        """Free-play environments the Zook Kit's Test mode offers (world agents named *Env)."""
+        d = self.root / "Agents" / "World"
+        return sorted(p.name for p in d.iterdir() if p.is_dir() and p.name.endswith("Env") and p.name != "Env") \
+            if d.is_dir() else []
+
     # --- replays -------------------------------------------------------------------
     def render_replay(self, replay: Path, video: bool = True, fps: float = 25.0, speed: float = 2.0,
                       view: str | dict | None = None, window: tuple[int, int] | None = None,
@@ -407,6 +474,29 @@ class Engine:
             status = "engine_error"
             error = f"[{state['error_window']}]\n{error or ''}"
         return status, error, time.time() - t0
+
+
+def _track_stats(track: list[tuple[float, float, float, float]], go_time: float) -> dict:
+    """Movement summary from (t, x, y, z) samples after Go: speed along -z (the trial direction),
+    ground distance, net displacement, heading drift and height range. 1 unit = 4 cm."""
+    pts = [p for p in track if p[0] >= go_time]
+    if len(pts) < 2:
+        return {"moved": None}
+    import math
+
+    path = sum(math.dist((a[1], a[3]), (b[1], b[3])) for a, b in zip(pts, pts[1:]))
+    dx, dz = pts[-1][1] - pts[0][1], pts[-1][3] - pts[0][3]
+    dt = pts[-1][0] - pts[0][0]
+    return {"moved": {
+        "seconds": round(dt, 2),
+        "forward_units": round(-dz, 2),  # trials put the target at -z
+        "forward_cm_per_s": round(-dz * 4 / dt, 1) if dt > 0 else None,
+        "ground_path_units": round(path, 2),
+        "net_units": round(math.hypot(dx, dz), 2),
+        "drift_deg": round(math.degrees(math.atan2(dx, -dz)), 1) if (dx or dz) else 0.0,
+        "height_min": round(min(p[2] for p in pts), 2), "height_max": round(max(p[2] for p in pts), 2),
+        "fell": min(p[2] for p in pts) < pts[0][2] - 5.0,
+    }}
 
 
 def _write_sidecar(video: Path, job: Job, r: Result) -> None:
