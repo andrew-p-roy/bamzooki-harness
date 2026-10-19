@@ -29,6 +29,7 @@ submissions = 1                          # how often submit_design may be called
 
 [scoring]
 draw = 0.5                               # a game with no winner (e.g. time limit) is worth half a win
+time_limit = 120                         # seconds of play after Go, every contest (tests and evaluation)
 
 # The one official game played by submit_design. side = the submitted Zook's arena colour.
 [evaluation]

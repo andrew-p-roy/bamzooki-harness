@@ -62,6 +62,7 @@ class Challenge:
     counts: tuple[str, ...] = ("run_contest", "run_trial")
     submissions: int = 1
     draw_points: float = 0.0  # a draw (no winner, e.g. time limit) counts this much of a win
+    time_limit: float = 120.0  # seconds of play after Go in every contest (tests and evaluation)
     path: Path | None = None
 
     @classmethod
@@ -86,12 +87,14 @@ class Challenge:
                    runs=int(budget.get("runs", 20)),
                    counts=tuple(budget.get("counts", ("run_contest", "run_trial"))),
                    submissions=int(budget.get("submissions", 1)),
-                   draw_points=float(raw.get("scoring", {}).get("draw", 0.0)), path=path)
+                   draw_points=float(raw.get("scoring", {}).get("draw", 0.0)),
+                   time_limit=float(raw.get("scoring", {}).get("time_limit", 120.0)), path=path)
 
     def describe(self) -> dict:
         return {"title": self.title, "description": self.description,
                 "evaluation_game": self.evaluation.public(),
                 "scoring": {"win": 1, "draw": self.draw_points, "loss": 0},
+                "time_limit_s": self.time_limit,
                 "budget": {"runs": self.runs or "unlimited", "counted_tools": list(self.counts),
                            "each_run_is": "one game: a trial, or one contest between two Zooks you choose",
                            "submissions": self.submissions}}

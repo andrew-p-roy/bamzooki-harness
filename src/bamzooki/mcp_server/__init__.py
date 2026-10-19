@@ -132,17 +132,18 @@ def build_server(studio: Studio) -> MCPServer:
         r = studio.preview(ref, tuple(views or DEFAULT_VIEWS))
         return _with_images({k: v for k, v in r.items() if k != "previews"}, r.get("previews"))
 
-    @server.tool(description="Play ONE contest game in the real game (on screen, ~20-90 s). You choose the game "
+    @server.tool(description="Play ONE contest game in the real game (on screen, up to the time limit of play). You choose the game "
                              "with the arguments: `contest` (see list_contests), `green` and `red` = the two Zooks "
                              "(each an example such as 'Spider' or one of your own designs such as 'MyZook' or "
                              "'MyZook@2'; you can pit two of your own versions against each other), and `seed` "
                              "(same seed = same result; change it to check a result isn't luck). Returns the "
                              "verdict: winner by colour and Zook, scores, finish time, distance travelled, falls, "
                              "the MP4 path and a 2x2 sheet of stills (Go, halfway, the finish, the end). "
-                             "Single-player contests take only green. Uses one test run; the result shows runs left.")
-    def run_contest(contest: str, green: str, red: str | None = None, seed: int = 1, video: bool = True,
-                    duration: float = 90.0) -> list:
-        r = studio.run(contest, green, red, seed=seed, video=video, duration=duration)
+                             "Single-player contests take only green. A game with no winner by the time limit (120 s of play "
+                             "after Go unless the challenge says otherwise) is a draw. Uses one test run; the "
+                             "result shows runs left.")
+    def run_contest(contest: str, green: str, red: str | None = None, seed: int = 1, video: bool = True) -> list:
+        r = studio.run(contest, green, red, seed=seed, video=video)
         return _with_images(r, {"stills (Go | halfway / finish | end)": r.get("stills")})
 
     @server.tool(description="Play ONE trial: test one Zook (`ref`) on its own with the Zook Kit's built-in trials: "

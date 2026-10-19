@@ -71,7 +71,7 @@ class Job:
     green: Path | None = None
     red: Path | None = None
     seed: int | None = 1
-    duration: float = 90.0  # sim seconds after Go before giving up
+    duration: float = 120.0  # sim seconds after Go before giving up
     go_time: float = 4.0  # sim second at which contestants start (the game uses 4)
     stop_on_finish: bool = True
     finish_hold: float = 3.0  # keep running this many real seconds after a finish
@@ -218,7 +218,7 @@ class Engine:
         args = ["-init", BOOT_NAME, "-videocfg", VIDEO_CFG,
                 "-script", _posix(LUA_DIR / "boot.lua"), "-job", _posix(run_dir / "job.dat")]
         if timeout is None:
-            timeout = 60 + 2.0 * (job.go_time + job.duration)
+            timeout = _wall_limit(job.go_time + job.duration)
         status, error, wall = self._launch(args, timeout, focus, job.window, job.position)
         raw: dict = {}
         if out.exists():
@@ -226,6 +226,8 @@ class Engine:
             status = raw.get("status", status)
         elif status == "exited":
             status = "no_result"
+        elif status == "timeout":
+            status, error = "stalled", _stalled(timeout, error)
         verdict = judge(raw, job.contest.players) if raw else None
         video = None
         if job.video and frames_dir.exists() and any(frames_dir.iterdir()):
@@ -342,9 +344,12 @@ class Engine:
         (run_dir / "job.dat").write_text(table.dumps(spec), encoding="latin-1")
         args = ["-init", BOOT_NAME, "-videocfg", VIDEO_CFG,
                 "-script", _posix(LUA_DIR / "boot.lua"), "-job", _posix(run_dir / "job.dat")]
-        status, error, wall = self._launch(args, timeout or 60 + 2 * (go_time + limit), focus)
+        timeout = timeout or _wall_limit(go_time + limit)
+        status, error, wall = self._launch(args, timeout, focus)
         out = run_dir / "result.dat"
         raw = table.loads(out.read_text("latin-1")) if out.exists() else {}
+        if not raw and status == "timeout":
+            status, error = "stalled", _stalled(timeout, error)
         res = {"trial": trial, "zook": name, "status": raw.get("status", status), "error": error,
                "result": raw.get("result"), "run_dir": run_dir, "wall_time": wall, "video": None}
         track = [(s["t"], s["p"]["x"], s["p"]["y"], s["p"]["z"]) for k, s in sorted(raw.get("track", {}).items())
@@ -474,6 +479,19 @@ class Engine:
             status = "engine_error"
             error = f"[{state['error_window']}]\n{error or ''}"
         return status, error, time.time() - t0
+
+
+def _wall_limit(sim_seconds: float) -> float:
+    """Real seconds to allow a run of `sim_seconds`: the engine runs at about real time when its
+    window has focus, and slows or stops when it doesn't."""
+    return 120 + 3.0 * sim_seconds
+
+
+def _stalled(timeout: float, error: str | None) -> str:
+    msg = (f"The game didn't finish within {timeout:.0f} s of real time, so it was stopped. The engine only "
+           "runs while its window is in front; this usually means the window lost focus. This is not a game "
+           "result and does not count.")
+    return f"{msg}\n{error}" if error else msg
 
 
 def _track_stats(track: list[tuple[float, float, float, float]], go_time: float) -> dict:

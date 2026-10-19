@@ -30,6 +30,9 @@ DEFAULT_VIEWS = ("three_quarter", "front", "top")
 GUIDE_PATH = MODEL_INSTRUCTIONS / "Zook Design Guide.md"
 
 
+# Statuses that are real game results (count as a run; "timeout" = the game's time limit).
+PLAYED = ("finished", "timeout")
+
 class Studio:
     """One model's workspace. The model only sees the example Zooks and its own designs; other
     models' designs are hidden and can't be referenced. With a challenge, test runs are budgeted."""
@@ -214,7 +217,7 @@ class Studio:
 
     # --- contests ----------------------------------------------------------------------
     def run(self, contest: str, green: str, red: str | None = None, seed: int = 1, video: bool = True,
-            record: bool = False, duration: float = 90.0) -> dict:
+            record: bool = False, duration: float = 120.0) -> dict:
         self._need_model()
         info = contests.find(contest, self.install)
         g = self._ref(green)
@@ -223,6 +226,8 @@ class Studio:
             return {"error": f"{info.name} needs two Zooks (green and red)"}
         if self.state and (why := self.state.check("run_contest")):
             return {"error": why, "budget": self.state.budget()}
+        if self.challenge:  # every contest in a challenge has the same time limit
+            duration = self.challenge.time_limit
         job = Job(info, g.path, rd.path if rd else None, seed=seed, duration=duration, video=video,
                   record=record, model=self.model)
         with self.lock:
@@ -253,7 +258,7 @@ class Studio:
             f.write(json.dumps({"kind": "contest", **summary}) + "\n")
         vs = rd.label if rd else "-"
         self._spend("run_contest", f"{info.name}: {g.label} vs {vs} seed {seed}", summary,
-                    r.status in ("finished", "timeout"))
+                    r.status in PLAYED)
         return summary
 
     def _spend(self, tool: str, detail: str, out: dict, counted: bool) -> None:
@@ -293,7 +298,7 @@ class Studio:
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"kind": "trial", **out}) + "\n")
-        self._spend("run_trial", f"{trial}: {r.label}", out, res["status"] in ("finished", "timeout"))
+        self._spend("run_trial", f"{trial}: {r.label}", out, res["status"] in PLAYED)
         return out
 
     # --- challenge -----------------------------------------------------------------------
@@ -326,9 +331,13 @@ class Studio:
         green, red = (mine, opp) if g.side == "green" else (opp, mine)
         if info.players == 1:
             green, red = mine, None
-        job = Job(info, green.path, red.path if red else None, seed=g.seed, video=True, model=self.model)
+        job = Job(info, green.path, red.path if red else None, seed=g.seed, video=True, model=self.model,
+                  duration=self.challenge.time_limit)
         with self.lock:
             r = self.engine.run(job, name=f"eval-{info.contest_file}")
+        if r.status not in PLAYED:
+            return {"error": f"The evaluation game didn't produce a result ({r.status}); your submission was NOT "
+                             "used. Call submit_design again.", "status": r.status, "detail": r.error}
         outcome = "win" if r.winner == g.side else ("draw" if r.winner is None else "loss")
         score = {"win": 1.0, "draw": self.challenge.draw_points, "loss": 0.0}[outcome]
         entry = {"design": mine.label, "game": {**g.public(), "seed": g.seed}, "outcome": outcome, "score": score,

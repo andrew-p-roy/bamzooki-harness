@@ -33,6 +33,7 @@ def test_default_challenge_loads():
     c = Challenge.load()
     assert c.runs == 20 and c.submissions == 1 and set(c.counts) == {"run_contest", "run_trial"}
     assert (c.evaluation.contest, c.evaluation.opponent, c.evaluation.seed) == ("Zook Sumo", "Spider", 7)
+    assert c.time_limit == 120 and c.describe()["time_limit_s"] == 120
     shown = c.describe()["evaluation_game"]
     assert shown["side"] == "green" and "secret" in str(shown["seed"])  # models can't rehearse it
 
