@@ -220,12 +220,29 @@ python tools/spike/engine.py run --timeout 120 --trace .cache/bamzooki/logs/t.tx
 ```
 `aiharness.vcfg` must exist in the save root (windowed 800×600). Results go to `<sandbox>/contest_out.dat` and the spike logs.
 
-### M1: Zook SDK (Python)
-- [ ] Codec: archive container read/write (§4.1), key passed in.
-- [ ] Parser/serializer for the genome XML that round-trips byte-identically on all example Zooks.
-- [ ] A high-level JSON schema for models (parts, joints, mirroring, colours, movement params) → genome. Validate against ranges extracted from the Builder scripts.
-- [ ] Writer that creates `Teams/<team>/Creatures/<Name>/1.0.zook` and updates `zook_list.tab` if required.
-- [ ] Decide on the passport/photo: strip it, keep it, or generate it.
+### M1: Zook SDK (Python) — implemented (`bamzooki.sdk`)
+- [x] Codec: archive container read/write (§4.1), key passed in (`codec.archive`).
+- [x] Genome documents (`sdk.genome`): an exact parser/serializer. All 7 install Zooks round-trip **byte-identically** (including the CRLF v1 template). Format: one element per line pair, `\t` indent, `<tag k = "v" … >` / `</tag> `, attributes in file (= ASCII) order, no text content.
+- [x] Design schema (`sdk.schema`): every Zook Kit slider with its genome attribute, range and default, taken from `BuilderParts`' own slider definitions (`myAttributeGroups` / `myRequiredAttributes`), grouped like the Zook Kit panels (size, shape, attach, rotate, movement, gait (root only), look).
+- [x] Spec ⇄ genome (`sdk.zook.Zook`): `to_spec()` folds mirror twins (siblings sharing `mirror_group` with opposite `phi` and the same sub-structure) into one part with `mirror: true` (plus `mirror_phase` when the twin's `leg_phase` differs). `from_spec()` builds a v2 genome: twins get `phi`/`yaw`/`roll` negated and `ik_side` Left↔Right swapped, and share mirror groups with the original subtree, matching the Builder's `CloneInMirrorGroup`. Legacy attributes (`spine_amplitude`, `side`, …) round-trip in `legacy`.
+- [x] Validation (`validate_spec`): ranges, enums, unknown keys, name ≤ 25 characters (Zook Kit limit), mirror needs `around ≠ 0`, and the Zook Kit's IK rules (`CanBeIK1`/`CanBeIK2`: *double* needs a non-root, non-moving parent; only one double per parent; no double under single/double). Edit ops (`apply_edits`): set/add/remove by path.
+- [x] **Finalising in the engine** (`Engine.workshop`, Lua `HarnessBuilder specializes BuilderParts`). A draft is loaded by the game's own Builder code, which:
+  - clamps out-of-range sliders and reports the clamping;
+  - assigns mirror groups;
+  - lays every part out on its parent's surface (`posx/posy/posz`, ray-cast against the parent mesh). **`Evo` positions parts from these stored values, so drafts must be finalised before a contest;**
+  - creates default IK paths for moving parts (`MessageIKPositions`; `Evo` ignores movement without IK data);
+  - computes passport stats (`SetPhysicalProperties`: height/length/width ×4 cm, weight, components) and saves an archived v2 Zook.
+
+  `HarnessWorkshop` then photographs it (`HarnessCamera.Snapshot` → PNG) from named views. The passport photo album is simply omitted, which the Builder supports (`RemovePassportImage`).
+- [x] Store (`sdk.store.Zoo`): `zooks/<model>/<Name>/<n>.0.zook` + `.json` + previews. Refs: `Ant`, `Name`, `Name@n`, `model/Name@n`.
+- [ ] Optional: export to the game's `Teams/<team>/Creatures/...` (+ `zook_list.tab`) so designs can be opened in the Zook Kit.
+
+Findings while building it (*verified*):
+- **Only Blob meshes work in contests.** The Zook Kit offers Cube and Sphere, and they render in the Builder, but a Zook containing either makes `Evo` fail ("Unknown error in function Initialize"). All 154 parts in the example Zooks are Blobs, so the schema allows Blob only.
+- The Zook Kit's default texture `bare` has no file. Missing textures are tolerated, though: two examples reference `Test` and `white.bmp`, which don't exist. The harness defaults to `aawhite` and only warns about unknown names. Texture names may include `.bmp`; `NewTeam/Textures` and `Teams/examples/Textures` together give 56 names.
+- Root gait sliders (`zook_speed`, `turn_sharpness`, `turn_smoothness`) take precedence over the stored legacy fields `IKspeed`/`minAmplitude`/`minAngle`, which `Evo.AddRootBits` derives from them. `Evo` builds the Zook's neural controller itself from the body; there is no brain to design.
+- Directions: the Zook faces +z; `attach.around` 0 = front, ±90 = sides, 180 = back; negative `elevation` = upper half; positive `rotate.up_down` tilts a part downwards. A Blob of size 1 is a unit-sized ellipsoid.
+- `BuilderParts` has a built-in `MessageMutate` (Gaussian slider mutation), which is a candidate for M5 search.
 
 ### M2: Contest runner (script the real engine, on screen) — implemented
 `bamzooki.runner` (`run_contest`, `Engine`, `Job`, `Result`), CLI `tools/run_contest.py`. How it works:
@@ -269,9 +286,12 @@ Remaining:
 - [ ] Optional: ffmpeg `gdigrab` screen capture (real-time, any resolution) if in-engine capture is too slow for high-resolution video.
 - [ ] Optional: picture-in-picture or side-by-side layouts (e.g. engine view plus the model's reasoning in a terminal) can be composed in ffmpeg from `contest.mp4` and a screen recording.
 
-### M4: Model-facing API
-- [ ] MCP server (plus a plain Python/CLI API) with tools such as `list_part_types`, `list_contests`, `create_zook(spec)`, `modify_zook`, `validate_zook`, `render_preview` (Photographer snapshot for vision models), `run_contest`, `get_result`, `get_video`.
-- [ ] Contest documentation for models: rules per contest, extracted from the contest pack and behaviours.
+### M4: Model-facing API — implemented (`bamzooki.studio`, `bamzooki.mcp_server`)
+- [x] `Studio(model)`: the design guide (schema + textures + tips), contests with plain-language rules (`runner.contests.RULES`, our wording from each behaviour graph), Zook listing, `get_zook` (spec + stats), `validate`, `save_zook` (validate → draft → finalise in the engine → previews → store), `edit_zook` (edit ops → new version), `preview`, `run` (verdict, winning Zook, scores, finish time, falls, distance travelled, MP4), and `results` (`zooks/<model>/results.jsonl`). Engine jobs are serialised with a lock.
+- [x] MCP server (`python -m bamzooki.mcp_server --model <name>`, stdio; MCP Python SDK 2.x `MCPServer`). Tools: `get_design_guide`, `list_contests`, `get_contest`, `list_zooks`, `get_zook`, `validate_zook`, `save_zook`, `edit_zook`, `preview_zook`, `run_contest`, `list_results`. `save_zook`/`edit_zook`/`preview_zook` return preview images as MCP image content (vision feedback). Verified over stdio with the MCP client.
+- [x] End-to-end check: a quadruped designed from scratch as a spec (blue spotted body, mirrored alternating legs) was finalised, previewed, and ran 40 s of Sumo against Ant (it walked 34.5 units, neither Zook fell, no winner by the time limit).
+- [ ] A "walk test" tool (express on flat ground, measure speed and heading) for quicker feedback than a full contest.
+- [ ] Optional: `IK` path editing (`movement.ik_points` is read and written, but the guide doesn't explain it yet).
 
 ### M5: Competitions & search (later)
 - [ ] Tournaments between models across the 12 contests, with Elo ratings, saved replays and videos.
@@ -282,7 +302,7 @@ Remaining:
 ## 8. Open questions / unknowns
 
 - The meaning of the 5-byte marker `00 01 00 00 00` (possibly flags + version).
-- Whether passport `details` and `modifications` are validated or recomputed; whether `uid` matters for loading or contests.
+- ~~Whether passport `details` matter.~~ The harness lets the Builder recompute the physical stats when finalising. Hand-made owners/`uid`s and an omitted photo album load and compete fine. `modifications` (per-owner edit percentages) are optional.
 - ~~Whether contest scoring is deterministic.~~ **Yes, with a fixed seed** (§3). Still to check: other contests, and Zooks with more complex neural controllers.
 - **Confirmed on screen: in Sumo the example Zooks fall off the table.** Both end about 24 units below their start (y ≈ −24) within 15 s, at x ≈ 18–25. So with the default contest, a Zook that isn't pushed off loses by falling, which makes "last one on the table" effectively the win condition. Still to check: whether the tables are scaled by `contest_unit_scale = 40`, and whether the `NoContact` behaviours (timeout 0) are what triggers the fall.
 - `injection_listen_port` (default **3030**), `monitor_socket`, `performance_socket`, `rmt_server` and `visual_broadcast` exist in the exe. "Injection" may mean sending Lua into a running engine over TCP, which would allow live control without restarting. *Unverified; worth a look for M2/M4.*

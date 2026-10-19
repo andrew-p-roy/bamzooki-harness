@@ -49,6 +49,24 @@ function SetViewAngle(angle)
 	SetViewAngles()
 end
 
+-- One still image from an explicit viewpoint (previews). GetImageAsString renders on demand;
+-- the game's Photographer calls it twice so the image reflects the new camera transform.
+-- Leaves follow-cam mode (zook = -1) so the next frame doesn't move the camera back.
+function MessageSnapshot(path, pos, target, angle, w, h)
+	mySnapshotMode = 1
+	MessageResize(0, 0, w, h)
+	myAreaW = w
+	myAreaH = h
+	myVerticalViewAngle = angle
+	SetViewAngles()
+	Camera.SetPosition(pos)
+	Camera.SetTarget(target, Vector.New(0, 1, 0))
+	local image = Camera.GetImageAsString()
+	image = Camera.GetImageAsString()
+	String.WriteFile(path, image)
+	return 1
+end
+
 function MessageSetClock(t)
 	myClock = t
 end
@@ -61,7 +79,12 @@ function SystemCamera(frametime)
 		myAreaH = h
 		MessageResize(0, 0, w, h)
 	end
-	UpdateView()
+	-- SplitCamera.UpdateView needs a view (SetView); until then (or for stills) leave it alone.
+	if myZook ~= nil and myZook ~= -1 then
+		UpdateView()
+	elseif myZook == -1 and myTarget ~= nil and mySnapshotMode == nil then
+		UpdateView()
+	end
 	if myCapturing == 1 then
 		local t = myClock
 		if t == nil then

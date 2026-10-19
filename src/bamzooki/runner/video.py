@@ -68,6 +68,17 @@ def sequence(frames: dict[int, Path]) -> list[Path]:
     return out
 
 
+def hex_to_png(hex_file: Path, png: Path, ffmpeg: str | None = None) -> Path:
+    """Convert one engine image string (Camera.GetImageAsString) to PNG."""
+    w, h, rgb = decode_hex_frame(Path(hex_file).read_text("ascii"))
+    cmd = [find_ffmpeg(ffmpeg), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
+           "-s", f"{w}x{h}", "-i", "-", "-frames:v", "1", "-update", "1", str(png)]
+    res = subprocess.run(cmd, input=rgb, capture_output=True)
+    if res.returncode != 0:
+        raise VideoError(f"ffmpeg failed: {res.stderr.decode(errors='replace')[-300:]}")
+    return png
+
+
 def frames_to_mp4(frames_dir: Path, out: Path, fps: float, ffmpeg: str | None = None, crf: int = 20,
                   keep_frames: bool = False) -> Path:
     frames = frame_files(frames_dir)

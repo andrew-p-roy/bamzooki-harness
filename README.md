@@ -5,8 +5,8 @@ Lets AI models design BAMZOOKi creatures (Zooks) through an API and test them in
 [Documentation/BAMZOOKI_HANDOFF.md](Documentation/BAMZOOKI_HANDOFF.md) for the file formats,
 engine findings and roadmap.
 
-Status: M0 (setup and feasibility). The codec and key derivation work; the SDK,
-engine runner and MCP server are stubs.
+Status: M0–M4 working: codecs and key derivation, Zook SDK, on-screen contest runner with
+verdicts, video and replays, and an MCP server for models.
 
 ## Bring your own copy: no BBC files or keys in this repo
 
@@ -90,6 +90,39 @@ deterministic for a given `seed`. Each run's files (job, logs, result table, rep
 MP4) go to `.cache/bamzooki/runs/<timestamp>-<contest>/`. The engine runs from a copy of
 your install under `.cache/bamzooki/sandbox/`; your install is never modified.
 
+## Letting a model design Zooks (MCP)
+
+The MCP server gives any MCP client (Claude Code, Claude Desktop, ...) tools to read the
+design guide and contest rules, inspect example Zooks, **save designs** (validated, laid out by
+the game's own Zook Kit code, returned with **preview images**), edit them, and **run
+contests** in the real game with a verdict and an MP4.
+
+```sh
+# Claude Code (from this repo; the --model name picks the folder for designs and videos)
+claude mcp add bamzooki -- <repo>/.venv/Scripts/python.exe -m bamzooki.mcp_server --model claude-opus-5-5
+```
+
+For Claude Desktop, add the same command to `claude_desktop_config.json` under `mcpServers`.
+Tools: `get_design_guide`, `list_contests`, `get_contest`, `list_zooks`, `get_zook`,
+`validate_zook`, `save_zook`, `edit_zook`, `preview_zook`, `run_contest`, `list_results`.
+The game window appears whenever a tool needs the engine (save/preview: a few seconds;
+contest: up to a minute or so).
+
+Designs are kept per model in `zooks/<model>/<Name>/<n>.0.zook` with a `.json` (spec, stats,
+notes) and preview PNGs; results append to `zooks/<model>/results.jsonl`. `zooks/` is
+gitignored. The same features are available in Python via `bamzooki.studio.Studio`.
+
+A Zook spec is a tree of Blob parts (see `src/bamzooki/sdk/schema.py` or `get_design_guide`):
+
+```json
+{"name": "Quaddy", "body": {"size": {"width": 1.2, "height": 0.6, "length": 1.8},
+  "gait": {"cycle_speed": 0.6}, "look": {"rgb": [0.2, 0.7, 1.0], "texture": "spots"},
+  "children": [
+    {"name": "front leg", "size": {"width": 0.25, "height": 0.25, "length": 1.1},
+     "attach": {"elevation": 35, "around": 55}, "rotate": {"up_down": 45},
+     "movement": {"type": "single", "phase": 0}, "mirror": true, "mirror_phase": 0.5}]}}
+```
+
 ## Layout
 
 ```
@@ -98,9 +131,10 @@ src/bamzooki/
   install.py    install discovery and runtime key derivation
   config.py     config file and env var handling
   guard.py      asset/secret guard (used by pre-commit, CI and tests)
-  sdk/          Zook SDK (M1, stub)
-  runner/       engine runner (M2, stub)
-  mcp_server/   MCP server (M4, stub)
+  sdk/          Zook SDK: genome codec, design schema, spec <-> genome, validation, zoo store
+  runner/       engine runner: sandbox, Lua harness, contests, judge, video, replays, workshop
+  studio.py     high-level API for models (design, preview, run, results)
+  mcp_server/   MCP server wrapping the studio
 tools/          extract.py, check_assets.py, spike scripts
 tests/          synthetic codec tests plus install-backed tests (skipped without an install)
 ```

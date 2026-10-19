@@ -26,6 +26,40 @@ CONTEST_PATCHES: dict[str, dict[int, dict]] = {
 }
 
 
+# Plain-language rules for models, written from each contest's behaviour graph (our wording).
+# Green and red are the arena's colours; contests start 4 s after the world is created ("Go").
+RULES: dict[str, str] = {
+    "CP_ZOOK_SUMO": "Sumo on a raised round table. Both Zooks are steered at each other; a Zook that "
+                    "wanders too far from the centre walks back. The first Zook to lose contact with the "
+                    "table (pushed or fallen off) loses. Wins come from pushing power, grip and stability.",
+    "CP_MERRY_GO_ZOOK": "Both Zooks start on a turntable and walk towards targets. The first Zook to lose "
+                        "contact with the turntable loses. Stability and grip on a moving floor matter most.",
+    "CP_WEAKEST_ZOOK": "Head-to-head on a track with a pit/sensor zone. Each Zook walks towards the far end; "
+                       "the first Zook to touch the sensor (pushed or fallen in) loses. Pushing power and "
+                       "staying upright matter. (Rule inferred from the contest's sensors.)",
+    "CP_ZOOK_BALL_GREEN_STRIKER": "Zookball. Green is the striker: it walks to the ball and must push it into "
+                                  "the goal. Red is the goalkeeper and stays frozen until the ball is first "
+                                  "touched. Goal = green wins; ball out of bounds = green loses (red wins).",
+    "CP_ZOOK_BALL_RED_STRIKER": "Zookball. Red is the striker: it walks to the ball and must push it into the "
+                                "goal. Green is the goalkeeper and stays frozen until the ball is first "
+                                "touched. Goal = red wins; ball out of bounds = red loses (green wins).",
+    "CP_ZOOK_MARBLES": "Race along a course to a finish sensor; the first Zook to touch it wins. Speed and "
+                       "the ability to keep a straight line matter.",
+    "CP_ZOOK_SMASH": "Race through a course of waypoints (with obstacles to smash through) to a finish "
+                     "sensor; the first Zook to touch it wins.",
+    "CP_ZOOK_SUPER_HURDLES": "Hurdles race: walk over a course of obstacles (bars, troughs, ramps) to the "
+                             "finish sensor; the first Zook to touch it wins. Leg clearance and climbing matter.",
+    "CP_DODGY_ZOOK": "Obstacle race: each Zook follows a chain of targets (touching one sends it to the next) "
+                     "to a final target; the first Zook to touch the final target wins.",
+    "CP_ZOOK_IN_A_CHINA_SHOP_GREEN": "Single Zook (green) chases a roving target around a china shop for 25 s, "
+                                     "then freezes. Score = number of items it knocks over. (Not in the "
+                                     "game's contest pack; whether a high score is good is not confirmed.)",
+    "CP_ZOOK_IN_A_CHINA_SHOP_RED": "As China Shop (green) but for a red Zook.",
+    "CP_ZOOK_TAG": "Tag: both Zooks chase a target that jumps to a random spot whenever a Zook touches it. "
+                   "Each touch scores a point; after 45 s the higher score wins. (Not in the game's pack.)",
+}
+
+
 @dataclass
 class ContestInfo:
     name: str  # pack name ("Zook Sumo") or file stem for contests outside the pack

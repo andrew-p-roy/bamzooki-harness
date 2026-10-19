@@ -33,7 +33,8 @@ VIDEO_CFG = "aiharness.vcfg"
 CLASSES = ["AIHarnessDriver"]  # governor classes, defined at runtime by boot.lua
 # World-agent classes must exist as files under Agents/World (runtime classes are invisible
 # inside worlds), so prepare() encrypts these into the sandbox.
-WORLD_CLASSES = ["HarnessCamera"]
+WORLD_CLASSES = ["HarnessCamera", "HarnessBuilder"]
+PREVIEW_VIEWS = ("three_quarter", "front", "left", "top", "back", "right")
 # Client area of the engine's default 900x700 window (the camera re-fits to the real area anyway).
 DEFAULT_CLIENT = (884, 662)
 
@@ -243,6 +244,58 @@ class Engine:
         if video:
             _write_sidecar(video, job, result)
         return result
+
+    # --- workshop: finalise drafts + previews ------------------------------------------
+    def workshop(self, tasks: list[dict], shot_size: tuple[int, int] = (512, 512), shot_angle: float = 30.0,
+                 timeout: float | None = None, focus: str = "idle") -> list[dict]:
+        """Finalise draft Zooks with the game's Builder code and photograph them.
+
+        tasks: [{"draft": path, "out": path, "name": zook name, "owner": "model::name",
+                 "views": ["three_quarter", "front", ...], "preview_dir": path}]
+        Returns per task: {"clamped", "parts", "weight", bbox..., "previews": {view: png path}}.
+        """
+        from .video import hex_to_png
+
+        self.prepare()
+        self.write_video_cfg(None)
+        run_dir = self.runs / f"{time.strftime('%Y%m%d-%H%M%S')}-workshop"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        spec_tasks = {}
+        for i, t in enumerate(tasks, 1):
+            shots = {j: {"view": v, "path": _posix(run_dir / f"task{i}_{v}.hex")}
+                     for j, v in enumerate(t.get("views", ()), 1)}
+            spec_tasks[i] = {"draft": _posix(t["draft"]), "out": _posix(t["out"]), "name": t["name"],
+                             "owner": t.get("owner", "bamzooki-harness"), "shots": shots or None}
+        spec = {
+            "driver": "HarnessWorkshop", "classes": {1: "HarnessWorkshop"}, "camera": 3,
+            "tasks": spec_tasks, "texture_dir": _posix(self.root / "NewTeam" / "Textures"),
+            "shot_w": shot_size[0], "shot_h": shot_size[1], "shot_angle": shot_angle,
+            "window_title": "BAMZOOKi harness - workshop",
+            "out": _posix(run_dir / "result.dat"), "log": _posix(run_dir / "workshop_log.txt"),
+            "boot_log": _posix(run_dir / "boot_log.txt"),
+        }
+        (run_dir / "job.dat").write_text(table.dumps(spec), encoding="latin-1")
+        args = ["-init", BOOT_NAME, "-videocfg", VIDEO_CFG,
+                "-script", _posix(LUA_DIR / "boot.lua"), "-job", _posix(run_dir / "job.dat")]
+        status, error, _ = self._launch(args, timeout or 60 + 20 * len(tasks), focus)
+        out = run_dir / "result.dat"
+        raw = table.loads(out.read_text("latin-1")) if out.exists() else {}
+        results = []
+        for i, t in enumerate(tasks, 1):
+            info = dict(raw.get("tasks", {}).get(i, {}))
+            info["previews"] = {}
+            if not info:
+                info["error"] = error or f"workshop {status}"
+            for j, v in enumerate(t.get("views", ()), 1):
+                hexf = run_dir / f"task{i}_{v}.hex"
+                if hexf.exists():
+                    png = Path(t.get("preview_dir", run_dir)) / f"preview_{v}.png"
+                    png.parent.mkdir(parents=True, exist_ok=True)
+                    info["previews"][v] = hex_to_png(hexf, png)
+                    hexf.unlink()
+            info["finalized"] = Path(t["out"]).exists()
+            results.append(info)
+        return results
 
     # --- replays -------------------------------------------------------------------
     def render_replay(self, replay: Path, video: bool = True, fps: float = 25.0, speed: float = 2.0,

@@ -20,3 +20,7 @@
 # Where MP4 renders go, one folder per model: <render_dir>/<model>/<timestamp>_<contest>_....mp4
 # Relative paths are resolved against the repo root. Gitignored by default ("renders/").   BAMZOOKI_RENDER_DIR
 # render_dir = "renders"
+
+# Where models' Zook designs are kept: <zoo_dir>/<model>/<Name>/<n>.0.zook (+ .json spec, previews).
+# Gitignored by default ("zooks/").                                     BAMZOOKI_ZOO_DIR
+# zoo_dir = "zooks"

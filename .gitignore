@@ -4,6 +4,9 @@
 # --- Video renders (renders/<model>/<timestamp>_....mp4 + .json); contain game visuals ---
 /renders/
 
+# --- Models' Zook designs (encrypted .zook files + specs + previews) ---
+/zooks/
+
 # --- Extraction cache / install sandbox (decrypted scripts, decoded Zooks, keys-derived data) ---
 /.cache/
 
