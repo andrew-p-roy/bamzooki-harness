@@ -1,7 +1,7 @@
 # HarnessWorkshop specializes Agent embeds Visual
 
 -- bamzooki harness workshop: finalise draft Zooks and photograph them (previews for models).
--- Job: tasks = { i = { draft, out, name, shots = { j = { path, pos, target, angle } } } },
+-- Job: tasks = { i = { draft, out, name, owner, shots = { j = { path, view } } } }, shot_angle,
 -- texture_dir, shot_w, shot_h, out (result table), log. Lua 4.0 dialect (see AIHarnessDriver).
 
 function HLog(msg)
