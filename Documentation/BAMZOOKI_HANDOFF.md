@@ -227,24 +227,47 @@ python tools/spike/engine.py run --timeout 120 --trace .cache/bamzooki/logs/t.tx
 - [ ] Writer that creates `Teams/<team>/Creatures/<Name>/1.0.zook` and updates `zook_list.tab` if required.
 - [ ] Decide on the passport/photo: strip it, keep it, or generate it.
 
-### M2: Contest runner (script the real engine, on screen)
-*Prototype exists:* `tools/spike/lua/harness_boot.lua` + `AIHarnessDriver.sax.lua` + `tools/spike/experiments.py` already do most of this. Productise them into `bamzooki.runner`.
-- [ ] Boot via the encrypted `loader` + plain-text harness (no per-change re-encryption). The job file (Bonsai table, `bamzooki.codec.table`) holds contest, Zook paths, `seed`, `max_sim_time`, `stop_on_finish`, camera mode, record flag and output paths.
-- [x] Load contest definitions as `ReadContestDefinitions` does and drive `Contest` directly with no selection UI *(spike)*.
-- [x] Hook `BehaviourReport` / round end; record reports, timing samples and final Zook positions *(spike)*.
-- [ ] Decide win conditions per contest (see §8: `finish` is unreliable; e.g. Sumo's `NoContact timeout = 0`).
-- [ ] Python `run_contest(contest, zook_a, zook_b, seed=…, record=False) -> Result`: write the job, launch the engine, **bring its window to the front**, wait with a timeout, and parse the result. Kill it on timeout, because errors raise modal dialogs.
-- [x] ~~Faster-than-real-time / no rendering~~: not needed (contests are about a minute; model think time dominates). Headless isn't possible on Windows (M0 follow-up).
-- [ ] One engine at a time per desktop, since it needs the foreground. Parallelism (Wine/Xvfb or VMs) is optional later.
-- [ ] Focus handling: give the window focus at launch (done in the spike), and optionally re-take it during a game when the user has been idle for a few seconds (`GetLastInputInfo`), so the user's own clicks aren't fought but a stalled game resumes.
+### M2: Contest runner (script the real engine, on screen) — implemented
+`bamzooki.runner` (`run_contest`, `Engine`, `Job`, `Result`), CLI `tools/run_contest.py`. How it works:
+- **Sandbox:** the engine runs from a copy of the install (`.cache/bamzooki/sandbox/install`); the install is never touched. `Engine.prepare()` encrypts exactly two of our files into the sandbox: the loader (`Scripts/Boot/aiharness.ssx`) and the world-agent class `HarnessCamera` (`Agents/World/HarnessCamera/HarnessCamera.sax`). Everything else is plain-text Lua in `src/bamzooki/runner/lua/`, read at runtime.
+- **Job/result files** are Bonsai text tables (`bamzooki.codec.table`). A run writes to `.cache/bamzooki/runs/<timestamp>-<contest>/`: `job.dat`, `boot_log.txt`, `driver_log.txt`, `result.dat`, optional `replay.bvz` and `contest.mp4`.
+- **Driver** (`AIHarnessDriver`): reads the `.contest` file, applies behaviour fixes, **pre-assigns Zooks by arena colour** (green → placeholder `flags "1"`, red → `flags "5"`; `Contest` accepts pre-filled `params.contestant` and an empty selection list), creates the world, cameras and lights, sends `Go` at sim 4 s, and records every `BehaviourReport`, a position track (0.5 s) and the final positions. The pack's `round.contestants` mapping is ignored on purpose, so "green" and "red" are always the arena's own colours.
+- **Window/focus:** the engine's own window at its default size (900×700, client ≈ 884×662) and position. The runner focuses it at launch, takes focus back after the user has been idle for 3 s (`focus="idle"`; also `"launch"`, `"always"`), and kills the engine if an error dialog appears (title contains "Error"), returning the `BonsaiErrorLog.txt` text. `--window WxH` / `--position right|left|center` exist but are opt-in (resizing after launch looked jumpy). The `.vcfg` size is **ignored** in windowed mode.
+- **Judge** (`runner.contests.judge`): winner by colour from the first `finish` scoreboard (contestant ids → colours). A one-sided scoreboard (Zookball: only the striker is scored, 1 = goal, 0 = ball out) gives the other side the complement. If `finish` has no scoreboard (China Shop), the latest `score` reports are used. Also reports `fell` per colour (dropped more than 5 units below the start).
+- **Behaviour fixes** (in memory only): `NoContact.timeout` 0 → 0.5 s for all contests (Sumo and Merry-Go-Zook ended instantly otherwise), and a per-contest patch for **Weakest Zook** (the green pit sensor `ListenContact` #5 has no target; set it to the green placeholder, agent 3).
 
-### M3: Rendering (live + video)
-- [ ] **Live:** run M2 with rendering on. The engine draws the contest in its own window.
-- [ ] **Recording:** enable the `WriteVisual` recording path to produce `.bvz`, so contests can be replayed in the Motion Player (`-init contestfileplayer -f <file>`).
-- [ ] **Video (MP4):** choose the most portable option:
-  1. In-engine frame dump: a timer calls `Camera.SaveAsJpeg` each frame during playback, then ffmpeg assembles the frames. Deterministic and hardware agnostic. *Preferred if it works.*
-  2. Screen capture of the engine window: ffmpeg `gdigrab` on Windows, `x11grab` on Xvfb.
-- [ ] Camera control for nicer shots (`Camera.SetPosition` / `SetTarget`; `SuperCam` and `SplitCamera` agents already exist).
+Survey: all 12 contests with Ant (green) vs Spider (red), seed 1 (`tools/spike/all_contests.py`; times are sim seconds after Go):
+
+| Contest | Winner | Decided by | Finish | Notes |
+|---|---|---|---|---|
+| Dodgy Zook | red | finish | 19.4 | race through obstacles |
+| Merry Go Zook | green | finish | 16.3 | knock-out on a turntable (needs the NoContact fix) |
+| Weakest Zook | red | finish | 8.2 | green fell into the pit (needs the patch) |
+| Zookball Green To Score | red | finish | 11.3 | striker failed (one-sided scoreboard) |
+| Zookball Red To Score | green | finish | 7.6 | striker failed |
+| Zook Marbles | red | finish | 13.5 | race |
+| Zook Smash | red | finish | 43.1 | race |
+| Zook Sumo | red | finish | 3.0 | knock-out (needs the NoContact fix; both Zooks then fall off) |
+| Zook Hurdles | red | finish | 14.6 | race |
+| CP_ZOOK_IN_A_CHINA_SHOP_GREEN / _RED (not in pack, 1 player) | — | score | 30.0 | items knocked down: Ant 36, Spider 44 (whether more is better is unconfirmed) |
+| CP_ZOOK_TAG (not in pack) | red | finish | 45.0 | 9 vs 2 |
+
+Remaining:
+- [ ] China Shop objective (maximise or minimise the knock-down count?) and whether Tag/China Shop should be offered to models.
+- [ ] Repeatability across contests (Sumo was verified identical with a fixed seed; the rest are untested).
+- [ ] A "draw" policy for timeouts (e.g. race progress from the track) if models need a result every time.
+- [ ] One engine at a time per desktop, since it needs the foreground. Parallelism (Wine/Xvfb or VMs) is optional later.
+
+### M3: Rendering (live + video) — implemented
+- [x] **Live:** default is the game's own 5-view SplitScreen with lights. `--camera single` uses one full-window `HarnessCamera` with a named view: `follow` (both Zooks, offset (18, 20, 65), minimum angle 30°), `overview` (the game's whole-arena camera), `green`/`red` (chase cams). The camera re-fits to the window's drawable area every frame.
+- [x] **Recording:** `--record` writes `replay.bmv` via `World.OpenVisualOutput` + `World.WriteVisual` (every 0.02 s, from sim 1 s) and zips it to `replay.bvz` (`System.Zip`). `tools/replay.py play <run>` opens it in the game's Motion Player (`-init contestfileplayer -f <file>`, which must be the last argument). Verified: it loads; press play in its UI.
+- [x] **Video:** `--video` captures frames in-engine and encodes `contest.mp4` (H.264, yuv420p) with ffmpeg. `tools/replay.py render <run> [--view …]` re-renders a `.bvz` to `replay.mp4` with any view, using a frame-stepped player (`HarnessPlayer`).
+  - Capture uses `Camera.GetImageAsString()`. `Camera.SaveAsJpeg` (called by the game's dead code) **doesn't exist** in this build, and `Camera.SaveToFile` exists but **writes nothing**. The string is hex: `08080800` + width (4 hex) + height (4 hex) + RGB24. `video.py` decodes it and streams raw frames into ffmpeg, then deletes the `.hex` files (about 1.4 MB per 640×360 frame).
+  - Frames are indexed by **clock time** (sim time live, replay time in the player), and gaps are filled with the previous frame, so video timing is exact even when the engine runs slower than real time.
+  - Cost: capture slows the engine in proportion to pixel count. Measured: 640×360 ×0.73 real time, the default ~884×662 window ≈ ×0.85, 1280×720 visibly not smooth on screen. Without capture, even 1920×1080 runs at about real time. Rendering itself is cheap.
+  - Replay rendering: `World.ReadVisual(speed)` advances **speed × 0.02 s of replay time per call** (frame-stepped, not wall-clock), so it's deterministic. With the 0.07 s update timer, speed 2 gives one 25 fps frame per update (~0.5× real time).
+- [ ] Optional: ffmpeg `gdigrab` screen capture (real-time, any resolution) if in-engine capture is too slow for high-resolution video.
+- [ ] Optional: picture-in-picture or side-by-side layouts (e.g. engine view plus the model's reasoning in a terminal) can be composed in ffmpeg from `contest.mp4` and a screen recording.
 
 ### M4: Model-facing API
 - [ ] MCP server (plus a plain Python/CLI API) with tools such as `list_part_types`, `list_contests`, `create_zook(spec)`, `modify_zook`, `validate_zook`, `render_preview` (Photographer snapshot for vision models), `run_contest`, `get_result`, `get_video`.
@@ -263,9 +286,9 @@ python tools/spike/engine.py run --timeout 120 --trace .cache/bamzooki/logs/t.tx
 - ~~Whether contest scoring is deterministic.~~ **Yes, with a fixed seed** (§3). Still to check: other contests, and Zooks with more complex neural controllers.
 - **Confirmed on screen: in Sumo the example Zooks fall off the table.** Both end about 24 units below their start (y ≈ −24) within 15 s, at x ≈ 18–25. So with the default contest, a Zook that isn't pushed off loses by falling, which makes "last one on the table" effectively the win condition. Still to check: whether the tables are scaled by `contest_unit_scale = 40`, and whether the `NoContact` behaviours (timeout 0) are what triggers the fall.
 - `injection_listen_port` (default **3030**), `monitor_socket`, `performance_socket`, `rmt_server` and `visual_broadcast` exist in the exe. "Injection" may mean sending Lua into a running engine over TCP, which would allow live control without restarting. *Unverified; worth a look for M2/M4.*
-- **Contest win conditions are unreliable as shipped.** Nothing in the consumer Simulator acts on `finish` (§6), and at least Sumo's `NoContact` (`timeout = 0`) fires immediately. For M2, decide per contest whether to (a) patch behaviour params at load time (e.g. a non-zero `NoContact` timeout), (b) ignore `finish` and judge from world state at a fixed sim time (positions, contacts), or (c) both. Survey all 12 contests' behaviour graphs first.
+- ~~Contest win conditions are unreliable as shipped.~~ **Resolved for M2** by patching behaviour data in memory: `NoContact.timeout` 0 → 0.5 s, plus the Weakest Zook target fix (see M2). With these, all 12 contests produce a `finish` (or `score`) result. The shipped Simulator never acted on `finish`, which is probably why these bugs went unnoticed.
 - ~~Whether the engine can run without a visible window.~~ **No** (on Windows); see the M0 follow-up table. Deprioritised.
-- Capturing frames: `PrintWindow` on the engine window gives a blank (blue) 3D view. `SplitCamera` already has a built-in frame dump: when `myRecordingImages` is set, `SystemCamera` calls `Camera.SaveAsJpeg("Movies/Tmp<n>.png")` every frame. A subclass can switch it on, and ffmpeg can assemble the frames (M3). Desktop capture (`ffmpeg -f gdigrab`) is the fallback.
+- ~~Capturing frames.~~ **Resolved (M3):** `Camera.GetImageAsString()` in a camera agent. `PrintWindow` gives a blank view, `SplitCamera`'s `SaveAsJpeg` path is dead code, and `SaveToFile` writes nothing.
 - Wine compatibility of RenderWare 3.4 / DirectX on the target machines.
 
 ---
@@ -395,6 +418,15 @@ Collected during M0 from the exe (strings, imports, a little disassembly), the d
 | Paths | `product_directory`, `default_teams_directory`, `texture_path`, `script_extension` |
 | Zooks | `genome_rhesus_macaque` (password), `genome_archive_header`, `recolour_zooks`, `green_zook_*`/`red_zook_*` colours |
 | Network (*unverified*) | `injection_listen_port` (default 3030), `injection_send_port`, `injection_secure`, `monitor_socket`, `performance_socket`, `socket_log`, `rmt_server`, `visual_broadcast`, `remote_visual_scale` |
+
+### C.6b Scripting gotchas found while building the runner (*verified*)
+- **Runtime classes are governor-only.** `Agent.CreateClassFromString` works for governor agents, but world agents created inside a world can't use runtime classes ("Failed find agent class"). `specializes` can't name a world class that isn't loaded yet either ("Parent of name SplitCamera has not been found"). World-agent classes must be files under `Agents/World/<Name>/<Name>.sax` (encrypted), which the runner writes into its sandbox.
+- **Messages need every declared argument.** Calling `Message<Name>(a, b, c, d)` with fewer arguments is silently rejected: `SendMessage` returns nil and no error is shown. Passing `nil` for the missing ones is not enough; always send real values.
+- **Timers can't be shorter than `max_tick_size`** ("Timer delay must be greater than 0.0625" with the Motion Player's settings). The Simulator profile uses 0.02.
+- `World.OpenVisualInput(file)` returns `(update_rate, start_time)` (the second value is the replay's first timestamp, not its length). `World.ReadVisual(speed)` advances `speed × update_rate` of replay time per call and returns the new time, or a negative value at the end. `World.Create(2)` is used for playback worlds.
+- Contest placeholders can be pre-filled: set `agents[i].params.contestant = {fullname = "<path>.zook"}` and create `Contest` with an empty selection table `{}`. Contestant ids follow ascending agent index.
+- Camera component members (from a probe): `GetImageAsString GetHeading GetOrientation SetPosition GetPosition SetOrientation Show SetBackground SetBluescreen ToFront Resize SetTransform Pick SetViewAngles Create SaveToFile ClearLines AddLine GetRay SetFog GetSize Area GetTransform GetScreenPoint SetFocalLength SetViewOffset Set SetTarget SetClipPlanes`. `Camera.Area()` returns the window's drawable size.
+- Windowed mode ignores `resolution_x/y` in the `-videocfg` file; the window opens at 900×700 (client 884×662).
 
 ### C.7 Logging and errors
 - `Trace(fmt, ...)` (`%` placeholders) → OutputDebugString `[ munki ] …`. Engine channels: `[ engine release ]`, `[ engine error ]`, `[ engine karma ]`. Capture with a DBWIN listener or DebugView (the spike's listener may slow the engine; use it only for debugging).
