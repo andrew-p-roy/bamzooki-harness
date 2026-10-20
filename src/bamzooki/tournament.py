@@ -7,8 +7,9 @@ or crashed) is played again once, then counts as a draw. With an odd number left
 gets a bye. The ranking follows the round each entrant went out in.
 
 The engine is reached through `play(green, red, seed) -> (status, winner colour or None, stats
-line)`, so the bracket logic runs without the game. `pause()` is called between matches so the
-audience can read one match's result before the next one starts.
+line)`, so the bracket logic runs without the game. `before(a, b, round)` is called ahead of each
+match and `after(bout)` once it's decided: the arena uses them for the models' comments, the
+audience's replies and the pause to read each result.
 """
 
 from __future__ import annotations
@@ -28,6 +29,11 @@ class Seat:
     @property
     def zook_name(self) -> str:
         return self.zook.split("/", 1)[-1].split("@", 1)[0]
+
+    @property
+    def folder(self) -> str:
+        """The entrant's folder in Zook Entries (the part of `zook` before the '/')."""
+        return self.zook.split("/", 1)[0]
 
     def billing(self) -> str:
         return f"{self.model} ({self.zook_name})"
@@ -92,12 +98,13 @@ def bout(a: Seat, b: Seat, play: Play, rng: random.Random, say: Say, games_per_b
 
 
 def knockout(seats: list[Seat], play: Play, say: Say, rng: random.Random | None = None,
-             games_per_bout: int = 3, pause: Callable[[], None] = lambda: None,
+             games_per_bout: int = 3,
+             before: Callable[[Seat, Seat, str], None] = lambda a, b, r: None,
+             after: Callable[[Bout], None] = lambda b: None,
              ) -> tuple[list[list[Bout]], list[tuple[int, Seat]]]:
     """Play the whole bracket. Returns the rounds and the ranking [(place, seat)], shared places
     for entrants knocked out in the same round."""
     rng = rng or random.Random()
-    played = 0
     alive = list(seats)
     rng.shuffle(alive)
     rounds: list[list[Bout]] = []
@@ -107,12 +114,11 @@ def knockout(seats: list[Seat], play: Play, say: Say, rng: random.Random | None 
         bouts = []
         for i in range(0, len(alive) - 1, 2):
             a, b = alive[i], alive[i + 1]
-            if played:
-                pause()
-            played += 1
             say(f"\n  {a.billing()}  v  {b.billing()}", "b")
+            before(a, b, name)
             bouts.append(bout(a, b, play, rng, say, games_per_bout))
             say(f"  -> {bouts[-1].winner.billing()} goes through", "m")
+            after(bouts[-1])
         if len(alive) % 2:
             bouts.append(Bout(alive[-1], None, winner=alive[-1], how="bye"))
             say(f"\n  {alive[-1].billing()} has a bye", "dim")

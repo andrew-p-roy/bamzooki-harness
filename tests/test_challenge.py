@@ -109,3 +109,24 @@ def test_self_registration_only_for_new_names(tmp_path):
     assert "error" in s.register("taken/model")  # folder taken_model exists
     assert s.register("openai/gpt-5") == {"entrant": "openai/gpt-5", "folder": "openai_gpt-5"}
     assert s.zooks()["mine"] == {} and s.register("someone/else")["note"]
+
+
+def test_videos_go_to_the_entrant_folder_with_test_numbers(tmp_path, challenge):
+    from bamzooki.studio import _short
+
+    s = _studio(tmp_path)
+    s.challenge, s.state = challenge, ChallengeState(challenge, tmp_path / "zoo" / "me")
+    assert s._test_label() == "Test 01 - t"
+    s.state.spend("run_contest", "x")
+    assert s._test_label() == "Test 02 - t"
+    p = s._video_path("Test 02 - t - Zook Sumo - Bot@1 vs Ant - seed 7")
+    assert p == tmp_path / "zoo" / "me" / "Videos" / "Test 02 - t - Zook Sumo - Bot@1 vs Ant - seed 7.mp4"
+    p.parent.mkdir(parents=True)
+    p.write_bytes(b"")
+    assert s._video_path("Test 02 - t - Zook Sumo - Bot@1 vs Ant - seed 7").name.endswith(" (2).mp4")
+    assert s._video_path('bad: "name"?').name == "bad_ _name__.mp4"
+    _, z = s.zoo.new_version("me", "Bot")
+    z.write_bytes(b"")
+    assert _short(s._ref("Bot")) == "Bot@1" and _short(s._ref("Ant")) == "Ant"
+    s.challenge = s.state = None
+    assert s._test_label() == "Run"

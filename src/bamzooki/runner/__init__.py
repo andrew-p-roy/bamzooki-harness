@@ -87,6 +87,7 @@ class Job:
     config: dict = field(default_factory=dict)  # extra Config.Set values
     track_interval: float = 0.5
     model: str | None = None  # who designed/operates this run; renders go to <render_dir>/<model>/
+    video_path: Path | None = None  # write the MP4 here instead (e.g. the entrant's Videos folder)
 
 
 def default_model() -> str:
@@ -242,8 +243,9 @@ class Engine:
             names = [zook_label(z) for z in (job.green, job.red) if z]
             parts = [job.contest.name, "-vs-".join(names), f"seed{job.seed}" if job.seed is not None else None]
             try:
-                video = frames_to_mp4(frames_dir, render_path(self.render_dir, job.model or default_model(),
-                                                              parts, started), job.video_fps)
+                out_mp4 = job.video_path or render_path(self.render_dir, job.model or default_model(), parts, started)
+                Path(out_mp4).parent.mkdir(parents=True, exist_ok=True)
+                video = frames_to_mp4(frames_dir, Path(out_mp4), job.video_fps)
             except VideoError as e:
                 error = f"{error or ''}\nvideo: {e}".strip()
         go = raw.get("go_time", job.go_time)
@@ -315,10 +317,11 @@ class Engine:
     # --- trials (the Zook Kit's Test mode) ------------------------------------------------
     def trial(self, zook: Path, name: str, trial: str = "sprint", duration: float = 20.0, video: bool = False,
               view: str | dict = "chase", model: str | None = None, fps: float = 25.0,
-              timeout: float | None = None, focus: str = "idle") -> dict:
+              timeout: float | None = None, focus: str = "idle", video_path: Path | None = None) -> dict:
         """Run one of the Zook Kit's trials (TRIALS) or free play in an environment ("free:BoxEnv")
         for `duration` sim seconds. Returns the trial's own result (as the Zook Kit reports it
-        in the passport), the track, distance/height stats and optionally an MP4."""
+        in the passport), the track, distance/height stats and optionally an MP4 (at video_path
+        when given, else in the render folder)."""
         from .video import VideoError, frames_to_mp4, render_path
 
         if trial.startswith("free:"):
@@ -364,8 +367,10 @@ class Engine:
         res.update(_track_stats(track, go_time))
         if video and any(frames_dir.iterdir()):
             try:
-                res["video"] = frames_to_mp4(frames_dir, render_path(self.render_dir, model or default_model(),
-                                                                     [f"trial-{trial.replace(':', '-')}", name], started), fps)
+                out_mp4 = video_path or render_path(self.render_dir, model or default_model(),
+                                                    [f"trial-{trial.replace(':', '-')}", name], started)
+                Path(out_mp4).parent.mkdir(parents=True, exist_ok=True)
+                res["video"] = frames_to_mp4(frames_dir, Path(out_mp4), fps)
             except VideoError as e:
                 res["error"] = f"{error or ''}\nvideo: {e}".strip()
         return res

@@ -21,6 +21,12 @@ prompt to talk to it. Commands:
 While a model is working you can still type: a message is handed to it after its current step
 (the tool call or game it's in), it takes it into account and carries on; /stop halts it there,
 /next halts it and calls the next challenger (for a model that's stuck or not playing).
+Each run starts afresh: the previous Zook Entries move to Archive/<date_time>/ (--keep-entries
+carries on with them instead).
+
+In /contest both models comment before each match. Then, and after the game, talk to one with
+/<model or Zook name> <message> or type to both; Enter plays on.
+
 --verbose streams its reasoning and notes as it writes them and shows them, and its tool
 arguments, in full (normally each reply is shown when complete, cut to 100 words).
 
@@ -34,6 +40,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import sys
 import threading
 import time
@@ -55,6 +62,11 @@ KICKOFF = ("Begin the challenge now. Start with get_challenge. Work only through
 SHOW_WORDS = 100  # model text between tool calls is cut to this many words on screen (not in transcripts)
 NUDGE = ("You haven't submitted yet. Keep going with the bamzooki tools; when you're ready (or out of "
          "runs), call submit_design with your best design, then present your challenger.")
+PRE_MATCH = ("The {contest} knockout, {round}: your Zook {mine} is about to play {opp_model}'s Zook {opp_zook}. "
+             "{heard}Say something to the audience before the game: a comment, some trash talk, or a boast "
+             "about {mine}. Answer in ONE line (no line breaks, no lists) and don't call any tools.")
+AUDIENCE = "[{context}] Someone in the audience says to you: {msg}\n(Reply to them; don't call any tools.)"
+REMARK_CHARS = 280  # the pre-match comment is one line of at most this many characters
 INTERJECTION = ("[A message from the audience, sent while you were working. Take it into account (answer "
                 "briefly if it asks something), then carry on where you were.]\n\n{}")
 
@@ -98,15 +110,17 @@ class OpenRouter:
         return self._models.get(model, {})
 
     async def chat(self, model: str, messages: list[dict], tools: list[dict], on_delta=None,
-                   single_tool: bool = False) -> dict:
+                   single_tool: bool = False, tool_choice: str = "auto") -> dict:
         """One completion. With on_delta(kind, text) it is streamed: each piece of "reasoning" or
         "content" goes to on_delta as it arrives, and the reply is put back together into the
         same shape a non-streamed request returns."""
-        body = {"model": model, "messages": messages, "tools": tools, "tool_choice": "auto",
+        body = {"model": model, "messages": messages, "tools": tools, "tool_choice": tool_choice,
                 "max_tokens": self.max_tokens, "usage": {"include": True}}
         if self.temperature is not None:
             body["temperature"] = self.temperature
-        if single_tool:
+        if not tools:  # an empty tool list is an error for some APIs
+            del body["tools"], body["tool_choice"]
+        elif single_tool:
             body["parallel_tool_calls"] = False
         if on_delta:
             return await self._stream({**body, "stream": True}, on_delta)
@@ -228,6 +242,8 @@ class Entrant:
     design: str | None = None  # the submitted design ("folder/Name@n")
     qualified: bool = False  # its challenge game was a win
     single_tool: bool = False  # its provider takes one tool call per reply (found out on the way)
+    submission: dict | None = None  # submit_design's result
+    presented: bool = False  # its presentation has been saved
 
 
 class Arena:
@@ -249,6 +265,19 @@ class Arena:
         self.session = None
         self.tools: list[dict] = []
         self._stack = None
+
+    def archive_entries(self) -> Path | None:
+        """Move the previous sessions' Zook folders (designs, budgets, submissions) into
+        <arena>/Archive/<date_time>/Zook Entries/, so every model gets another go."""
+        zoo = self.cfg.zoo_dir
+        old = [p for p in zoo.iterdir()] if zoo.is_dir() else []
+        if not old:
+            return None
+        dest = self.arena_dir / "Archive" / time.strftime("%Y-%m-%d_%H-%M-%S") / zoo.name
+        dest.mkdir(parents=True, exist_ok=True)
+        for p in old:
+            shutil.move(str(p), str(dest / p.name))
+        return dest
 
     # --- MCP server per entrant ---
     async def _connect(self, model: str) -> None:
@@ -289,10 +318,11 @@ class Arena:
         self._stack, self.session = None, None
 
     # --- transcript ---
-    def _log(self, kind: str, text: str) -> None:
-        if not self.entrant or not self.entrant.transcript:
+    def _log(self, kind: str, text: str, entrant: Entrant | None = None) -> None:
+        e = entrant or self.entrant
+        if not e or not e.transcript:
             return
-        with self.entrant.transcript.open("a", encoding="utf-8") as f:
+        with e.transcript.open("a", encoding="utf-8") as f:
             f.write(f"\n### {kind} ({time.strftime('%H:%M:%S')})\n\n{text}\n")
 
     # --- the agent loop ---
@@ -398,6 +428,8 @@ class Arena:
                     say(f"\n{e.model}: ", "c", end="")
                     say(self._clip(text) if calls else text)  # working notes between tool calls are cut; answers aren't
                 self._log("model", text)
+            if not calls and text and e.submission and not e.presented:
+                self._save_presentation(e, text)
             if not calls:
                 passed, stop = self._interjections(e)  # typed while it was answering
                 if passed and not stop:
@@ -480,7 +512,7 @@ class Arena:
                    "draw" if d.get("status") == "finished" else f"no result ({d.get('status')})")
             say(f"     {d.get('contest')}: {d.get('green')} vs {d.get('red')} -> {res}", "g")
         elif name == "submit_design" and "outcome" in d:
-            e.submitted, e.design = True, d["design"]
+            e.submitted, e.design, e.submission = True, d["design"], d
             e.qualified = e.qualified or d["outcome"] == "win"
             how = " (time limit)" if d["outcome"] == "draw" and d.get("status") == "timeout" else ""
             say(f"     SUBMITTED {d['design']}: {d['outcome'].upper()}{how} (score {d['score']})", "m")
@@ -505,6 +537,34 @@ class Arena:
                 shown.append(kind)
             say(piece, "dim" if thinking else "", end="")
         return on_delta
+
+    def _save_presentation(self, e: Entrant, text: str) -> None:
+        """Zook Entries/<model>/Presentation - <challenge>.txt: the model's presentation of its
+        challenger, under a header with the facts (design, result, runs, cost; no video links)."""
+        s = e.submission or {}
+        folder = self.cfg.zoo_dir / entrant_folder(e.model)
+        state = ChallengeState(self.challenge, folder)
+        game = s.get("game") or {}
+        how = " (time limit)" if s.get("outcome") == "draw" and s.get("status") == "timeout" else ""
+        header = [
+            f"BAMZOOKi Arena - {e.model} presents its challenger",
+            f"Challenge:       {self.challenge.title} ({self.challenge.name})",
+            f"Date:            {time.strftime('%Y-%m-%d %H:%M')}",
+            f"Submitted Zook:  {s.get('design', '?')}",
+            f"Challenge game:  {game.get('contest', '?')} v {game.get('opponent', '?')}: "
+            f"{str(s.get('outcome', '?')).upper()}{how}, score {s.get('score', '?')}"
+            + ("  -> qualified for the knockout" if e.qualified else ""),
+            f"Test runs used:  {state.runs_used} of {self.challenge.runs or 'unlimited'}",
+            f"Tokens / cost:   {e.tokens:,} / ${e.cost:.4f}",
+        ]
+        path = folder / f"Presentation - {self.challenge.name}.txt"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join(header) + "\n\n" + text.strip() + "\n", encoding="utf-8")
+            e.presented = True
+            say(f"    [presentation saved: {path}]", "dim")
+        except OSError as err:
+            say(f"    [couldn't save the presentation: {err}]", "y")
 
     def _winning_submission(self, folder: str) -> dict | None:
         d = self.cfg.zoo_dir / folder
@@ -557,25 +617,55 @@ class Arena:
         zoo = Zoo(engine.install, examples_root=engine.root / "Teams" / "examples" / "Creatures")
         info = contests.find(self.challenge.evaluation.contest, engine.install)
 
+        now = {"round": "", "game": 0}  # for the video titles
+
         def play(green: tournament.Seat, red: tournament.Seat, seed: int) -> tuple[str, str | None, str]:
             job = Job(info, zoo.resolve(green.zook).path, zoo.resolve(red.zook).path, seed=seed,
                       duration=self.challenge.time_limit, video=True, model="Tournament")
             r = engine.run(job, name=f"cup-{info.contest_file}")
+            now["game"] += 1
+            if r.video:  # a copy for each competitor, beside its test videos
+                for me, opp in ((green, red), (red, green)):
+                    if me.folder == "examples":
+                        continue
+                    _keep_video(r.video, self.cfg.zoo_dir / me.folder / "Videos",
+                                f"Knockout {now['round']} game {now['game']} - {self.challenge.name} - {info.name} - "
+                                f"{me.zook_name} vs {opp.zook_name} ({opp.model}) - seed {seed}")
             return r.status, r.winner, _game_stats(r, green.zook_name, red.zook_name)
 
-        def pause(what: str = "the next match") -> None:  # time to read a match's result
-            if not self.keyboard:
-                return
-            self.keyboard.drain()  # typing during the games doesn't skip the pause
-            say(f"\n  [Enter] for {what} ", end="")
-            self.keyboard.get()
+        loop = asyncio.get_running_loop()
+        matches = [len(seats) - 1]  # matches still to play (a knockout of n has n - 1), to word the prompt
+
+        def before(a: tournament.Seat, b: tournament.Seat, round_name: str) -> None:
+            """Both models comment (the second hears the first), then the audience may answer."""
+            # "Semi-finals" -> "Semi-final" for one match's videos
+            now["round"], now["game"] = round_name[:-1] if round_name.endswith("finals") else round_name, 0
+
+            async def talk():
+                heard = ""
+                for me, opp in ((a, b), (b, a)):
+                    line = await self.remark(me, PRE_MATCH.format(
+                        contest=info.name, round=round_name, mine=me.zook_name, opp_model=opp.model,
+                        opp_zook=opp.zook_name, heard=heard), one_line=True)
+                    heard = f'{me.model} has just said: "{line}" ' if line else ""
+                await self.match_talk([a, b], f"{info.name} knockout, {round_name}: "
+                                              f"{a.billing()} v {b.billing()}, about to play", "to start the game")
+            asyncio.run_coroutine_threadsafe(talk(), loop).result()
+
+        def after(bout: tournament.Bout) -> None:
+            matches[0] -= 1
+            result = (f"{bout.winner.billing()} beat {bout.loser.billing()} in {len(bout.games)} game(s)"
+                      + (" on a coin toss" if bout.how == "coin toss" else ""))
+            nxt = "for the next match" if matches[0] else "for the final ranking"
+            asyncio.run_coroutine_threadsafe(self.match_talk(
+                [bout.a, bout.b], f"{info.name} knockout, just played: {result}", nxt), loop).result()
 
         say(f"\n*** THE {info.name.upper()} KNOCKOUT: {len(seats)} qualified Zooks ***", "b")
         for s in seats:
             say(f"    {s.billing()}  [{s.zook}]")
-        say("    Leave the game window in front while the games play.", "dim")
-        rounds, places = await asyncio.to_thread(tournament.knockout, seats, play, say, pause=pause)
-        await asyncio.to_thread(pause, "the final ranking")
+        say("    Leave the game window in front while the games play. Between games, talk to a model with "
+            "/<its name or its Zook's name> <message>, type to both, or press Enter to go on.", "dim")
+        rounds, places = await asyncio.to_thread(tournament.knockout, seats, play, say, before=before, after=after)
         champ = places[0][1]
         say("\n  Final ranking", "b")
         for place, s in places:
@@ -598,6 +688,63 @@ class Arena:
         self._log("runner", prompt)
         await self.converse()
         say("\n(Questions for the champion: just type them. /next or /challenger carries on.)", "dim")
+
+    async def remark(self, seat: tournament.Seat, prompt: str, one_line: bool = False) -> str:
+        """A contestant's answer in its own conversation (no tools): printed and returned. The
+        pre-match comment is held to one line."""
+        e = self.entrants[seat.model]
+        e.messages.append({"role": "user", "content": prompt})
+        self._log("runner", prompt, e)
+        try:
+            # tools stay declared (some providers require it once a history has tool calls) but unused
+            data = await self.router.chat(e.model, e.messages, self.tools, single_tool=e.single_tool,
+                                          tool_choice="none")
+        except (RuntimeError, httpx.HTTPError) as err:
+            e.messages.pop()
+            say(f"\n  [{seat.billing()} has nothing to say: {err}]", "r")
+            return ""
+        usage = data.get("usage") or {}
+        e.cost += float(usage.get("cost") or 0)
+        e.tokens += int(usage.get("total_tokens") or 0)
+        msg = (data.get("choices") or [{}])[0].get("message") or {}
+        text = (msg.get("content") or "").strip()
+        line = _one_line(text) if one_line else text
+        e.messages.append({"role": "assistant", "content": line or "(no comment)"})
+        self._log("model", line, e)
+        say(f"\n  {seat.model} ({seat.zook_name}): ", "c", end="")
+        say(line or "(no comment)")
+        return line
+
+    async def match_talk(self, seats: list[tournament.Seat], context: str, enter: str) -> None:
+        """Between games: '/<name> message' to one contestant, plain text to both, Enter to go on.
+        Lines typed while a game played are taken first."""
+        if not self.keyboard:
+            return
+        pending = self.keyboard.drain()
+        hint = " or ".join(f"/{_short_name(s.model)}" for s in seats)
+        while True:
+            if pending:
+                line = pending.pop(0)
+            else:
+                say(f"\n  [Enter] {enter}  ({hint} <message> to one, or type to both) ", "dim", end="")
+                line = await asyncio.to_thread(self.keyboard.get)
+            if line is None or not line.strip():
+                return
+            line = line.strip()
+            targets, msg = seats, line
+            if line.startswith("/"):
+                who, _, msg = line[1:].partition(" ")
+                seat = _find_seat(seats, who)
+                if not seat:
+                    say(f"  No one called {who!r} in this match: {hint} (a model's name or its Zook's name).", "y")
+                    continue
+                if not msg.strip():
+                    say(f"  Type your message after /{who}.", "y")
+                    continue
+                targets = [seat]
+            for s in targets:
+                self._log("audience", msg.strip(), self.entrants[s.model])
+                await self.remark(s, AUDIENCE.format(context=context, msg=msg.strip()))
 
     async def offer_contest(self) -> None:
         """When the queue has run out, ask whether to play the knockout now."""
@@ -755,6 +902,43 @@ def _one_call_per_turn(messages: list[dict]) -> None:
     messages[:] = out
 
 
+def _one_line(text: str, limit: int = REMARK_CHARS) -> str:
+    """A model's comment as one line: its first non-empty line, at most `limit` characters."""
+    line = next((ln.strip() for ln in text.strip().splitlines() if ln.strip()), "")
+    line = re.sub(r"\s+", " ", line).strip("*_ ")
+    if len(line) > limit:
+        line = line[:limit].rsplit(" ", 1)[0].rstrip(",;:-") + "..."
+    return line
+
+
+def _keep_video(video: Path, folder: Path, label: str) -> None:
+    """Copy a knockout game's video into an entrant's Videos folder as '<label>.mp4'."""
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", label).strip(" .")
+        shutil.copy2(video, folder / f"{name}.mp4")
+    except OSError as err:
+        say(f"    (couldn't copy the video to {folder}: {err})", "y")
+
+
+def _short_name(model: str) -> str:
+    return model.split("/")[-1]
+
+
+def _find_seat(seats: list, who: str):
+    """The contestant meant by `who`: its full model name, the name after the '/', or its Zook's
+    name, exactly, else by a prefix, else by any part of one, as long as only one matches (any case)."""
+    who = who.lower().strip()
+    if not who:
+        return None
+    names = [(s, {s.model.lower(), _short_name(s.model).lower(), s.zook_name.lower()}) for s in seats]
+    for fits in (lambda x: x == who, lambda x: x.startswith(who), lambda x: who in x):
+        found = [s for s, n in names if any(fits(x) for x in n)]
+        if len(found) == 1:
+            return found[0]
+    return None
+
+
 def _tool_args(raw) -> tuple[dict | None, str]:
     """A tool call's arguments as a dict, or (None, the error to send back). Some models send
     "null" or nothing for a call without arguments."""
@@ -816,6 +1000,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--max-tokens", type=int, default=int(a_cfg.get("max_tokens", 4000)))
     ap.add_argument("--temperature", type=float, default=a_cfg.get("temperature"))
     ap.add_argument("--auto", action="store_true", help="run every queued challenger without the prompt, then show the leaderboard")
+    ap.add_argument("--keep-entries", action="store_true",
+                    help="carry on with the previous Zook Entries (default: move them to Archive/<date_time>/ "
+                         "so every model starts afresh)")
     ap.add_argument("--verbose", "-v", action="store_true",
                     help="stream the model's reasoning and notes as it writes them, and show them and "
                          "its tool arguments in full (not cut to 100 words)")
@@ -828,4 +1015,7 @@ def main(argv: list[str] | None = None) -> None:
     challenge = Challenge.load(challenge_path)
     queue = a.challenger or list(a_cfg.get("challengers", []))
     arena = Arena(challenge, queue, a.max_turns, a.max_tokens, a.temperature, a.auto, a.verbose)
+    if not a.keep_entries and (moved := arena.archive_entries()):
+        say(f"Previous Zook Entries archived to {moved}: every model starts afresh (--keep-entries to carry on).",
+            "dim")
     asyncio.run(arena.repl())

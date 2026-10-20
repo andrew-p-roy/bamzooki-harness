@@ -58,8 +58,9 @@ Tips:
   `tools\arena.py` and use `/next`.
 - Results land outside the repo in `~/BAMZOOKi Arena/` (`Zook Entries/<model>/`, `Renders/<model>/`,
   `Transcripts/<model>/`).
-- Each model gets one attempt per challenge. Let one try again with
-  `.venv\Scripts\python.exe tools\challenge.py reset --model <id> --challenge challenges/short.toml`.
+- Every run of the arena starts afresh: the previous `Zook Entries/` (designs, budgets,
+  submissions) move to `Archive/<date_time>/Zook Entries/`, so each model gets another go. Add
+  `--keep-entries` to carry on from the last session instead.
 - Token use and cost are printed after each reply.
 
 Full details are in [The arena](#the-arena-models-compete-openrouter) below.
@@ -219,8 +220,15 @@ the repo:
 ```
 Zook Entries/<model>/<Name>/<n>.0.zook (+ .json, previews)   designs (spec, stats, notes)
 Zook Entries/<model>/challenge-<name>.json, results.jsonl     budget, submissions, results
-Renders/<model>/...mp4 (+ _stills.png, .json)                 videos and contact sheets
+Zook Entries/<model>/Videos/Test 03 - <challenge> - <contest> - <Zook> vs <opponent> - seed 7.mp4
+                         .../Test 04 - <challenge> - Trial sprint - <Zook>.mp4
+                         .../Challenge game - <challenge> - <contest> - <Zook> vs <opponent>.mp4
+                         .../Knockout Final game 1 - ... vs <opponent> (<its model>) - seed N.mp4
+                                                              every game it played (+ _stills.png, .json)
+Zook Entries/<model>/Presentation - <challenge>.txt           its presentation, with result, runs and cost
+Renders/Tournament/..., Renders/<name>/...                    knockout games; runs from the tools/ scripts
 Transcripts/<model>/<timestamp>.md (+ .mcp.log)              arena conversations (+ the MCP server's own log)
+Archive/<date_time>/Zook Entries/...                          earlier arena runs' entries (moved at start)
 ```
 
 The same features are available in Python via `bamzooki.studio.Studio`.
@@ -273,9 +281,12 @@ in the session, whether or not the queue is finished. It plays a knockout betwee
 submitted Zooks of every model that has qualified so far, using the challenge's contest and time
 limit. Each match is announced as `model (Zook) v model (Zook)`. A drawn game is replayed with
 sides swapped and a new seed, up to three games, and is then settled by a coin toss. A game the
-engine fails to finish is played once more, then counts as a draw. Each game's result (scores,
-how it was decided, finish time, falls) is printed, and the next match starts when you press
-Enter. Winners play winners until one is left. The ranking follows the round each model went
+engine fails to finish is played once more, then counts as a draw. Before each match both models
+say one line to the audience (a comment, trash talk or a boast about their Zook), and the second
+one hears the first. You can answer before the game and again after it: `/<name> <message>` talks
+to one model (its model name, the part after the `/`, or its Zook's name; any part of a name only one of them has will do, e.g. `/nano`),
+plain text goes to both, and Enter plays on. Each game's result (scores, how it was decided,
+finish time, falls) is printed. Winners play winners until one is left. The ranking follows the round each model went
 out in, and the champion gives a short speech and takes questions at the `you>` prompt. Videos
 are saved to `Renders/Tournament/`.
 
@@ -300,7 +311,9 @@ against the budget, and a failed `submit_design` can simply be retried.
 
 Each challenger's whole conversation is saved to `Transcripts/<model>/`, and the tokens and
 cost (from OpenRouter) are printed after each reply. Models without tool calling are skipped.
-To let a model try again, run
+Each run of the arena starts afresh: the previous `Zook Entries/` move to
+`Archive/<date_time>/Zook Entries/` (`--keep-entries` carries on with them instead). To let one
+model try again within a session, run
 `python tools/challenge.py reset --model <id> --challenge challenges/short.toml` (its designs are
 kept; only the budget and submissions reset).
 

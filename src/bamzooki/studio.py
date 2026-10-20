@@ -11,6 +11,7 @@ Every engine call (finalise, preview, contest) runs the real game on screen, one
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import threading
 import time
@@ -228,8 +229,10 @@ class Studio:
             return {"error": why, "budget": self.state.budget()}
         if self.challenge:  # every contest in a challenge has the same time limit
             duration = self.challenge.time_limit
+        vs = f" vs {_short(rd)}" if rd else ""
         job = Job(info, g.path, rd.path if rd else None, seed=seed, duration=duration, video=video,
-                  record=record, model=self.model)
+                  record=record, model=self.model,
+                  video_path=self._video_path(f"{self._test_label()} - {info.name} - {_short(g)}{vs} - seed {seed}"))
         with self.lock:
             r = self.engine.run(job, name=info.contest_file)
         v = r.verdict
@@ -261,6 +264,23 @@ class Studio:
                     r.status in PLAYED)
         return summary
 
+    def _test_label(self) -> str:
+        """'Test 03 - <challenge>': the number this run gets if it counts (a failed run's number is
+        used again by the next one). Without a challenge: 'Run'."""
+        if not self.state:
+            return "Run"
+        return f"Test {self.state.runs_used + 1:02d} - {self.challenge.name}"
+
+    def _video_path(self, label: str) -> Path:
+        """Zook Entries/<model>/Videos/<label>.mp4 (stills and the .json sidecar go beside it).
+        A clash (a failed run's video under the same test number) gets ' (2)', ' (3)', ..."""
+        folder = self.zoo.root / self.model / "Videos"
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", label).strip(" .")
+        path, n = folder / f"{name}.mp4", 2
+        while path.exists():
+            path, n = folder / f"{name} ({n}).mp4", n + 1
+        return path
+
     def _spend(self, tool: str, detail: str, out: dict, counted: bool) -> None:
         """Count a test run against the challenge budget (failed engine runs are free)."""
         if not self.state:
@@ -285,7 +305,9 @@ class Studio:
         if self.state and (why := self.state.check("run_trial")):
             return {"error": why, "budget": self.state.budget()}
         with self.lock:
-            res = self.engine.trial(r.path, r.name, trial, duration=duration, video=video, model=self.model)
+            res = self.engine.trial(r.path, r.name, trial, duration=duration, video=video, model=self.model,
+                                    video_path=self._video_path(
+                                        f"{self._test_label()} - Trial {trial.replace(':', ' ')} - {_short(r)}"))
         sheet = None
         if res.get("video"):
             d = (res.get("moved") or {}).get("seconds") or duration
@@ -332,7 +354,9 @@ class Studio:
         if info.players == 1:
             green, red = mine, None
         job = Job(info, green.path, red.path if red else None, seed=g.seed, video=True, model=self.model,
-                  duration=self.challenge.time_limit)
+                  duration=self.challenge.time_limit,
+                  video_path=self._video_path(f"Challenge game - {self.challenge.name} - {info.name} - "
+                                              f"{_short(mine)} vs {_short(opp)}"))
         with self.lock:
             r = self.engine.run(job, name=f"eval-{info.contest_file}")
         if r.status not in PLAYED:
@@ -363,6 +387,11 @@ class Studio:
             return []
         lines = log.read_text(encoding="utf-8").splitlines()
         return [json.loads(x) for x in lines[-limit:]]
+
+
+def _short(ref: ZookRef) -> str:
+    """A Zook as a video title shows it: 'Spider' (example) or 'Crusher@3'."""
+    return ref.name if ref.owner == "examples" else f"{ref.name}@{ref.version}"
 
 
 def _travel(tracks: dict) -> dict:

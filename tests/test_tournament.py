@@ -27,12 +27,16 @@ def test_seat_names():
 
 def test_winners_play_winners_and_ranking():
     field = seats(4)
-    pauses = []
-    rounds, places = knockout(field, strongest, quiet, random.Random(1), pause=lambda: pauses.append(1))
+    hooks = []
+    rounds, places = knockout(field, strongest, quiet, random.Random(1),
+                              before=lambda a, b, r: hooks.append(("before", r)),
+                              after=lambda bout: hooks.append(("after", bout.winner.model)))
     assert [len(r) for r in rounds] == [2, 1]
     assert places[0] == (1, field[3])
     assert places[1][0] == 2 and [p for p, _ in places[2:]] == [3, 3]
-    assert len(pauses) == 2  # between the three matches, not before the first
+    assert [h[0] for h in hooks] == ["before", "after"] * 3  # around every match
+    assert [h[1] for h in hooks[::2]] == ["Semi-finals", "Semi-finals", "Final"]
+    assert hooks[-1] == ("after", field[3].model)
 
 
 def test_odd_field_gets_a_bye():

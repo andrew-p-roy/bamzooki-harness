@@ -282,6 +282,107 @@ def test_stop_skips_the_rest_of_a_batch_of_calls():
     assert "not run" in tools[-1]["content"]
 
 
+def test_pre_match_comment_is_one_line():
+    from bamzooki.arena import _one_line
+
+    assert _one_line("\n**Crusher will flatten you!**\nSecond line.\n- a list") == "Crusher will flatten you!"
+    long = _one_line(" ".join(["boast"] * 100), limit=40)
+    assert long.endswith("...") and len(long) <= 43 and "\n" not in long
+
+
+def test_find_seat_by_model_or_zook_name():
+    from bamzooki.arena import _find_seat
+    from bamzooki.tournament import Seat
+
+    a, b = Seat("openai/gpt-5", "openai_gpt-5/Crusher@3"), Seat("anthropic/claude-sonnet-4.5", "x/Stomper@1")
+    seats = [a, b]
+    assert _find_seat(seats, "gpt-5") is a and _find_seat(seats, "openai/gpt-5") is a
+    assert _find_seat(seats, "STOMPER") is b and _find_seat(seats, "claude") is b and _find_seat(seats, "cru") is a
+    assert _find_seat(seats, "sonnet") is b  # any part of a name
+    assert _find_seat(seats, "nobody") is None and _find_seat(seats, "") is None
+    assert _find_seat(seats, "t") is None  # starts neither, inside both: ambiguous
+
+
+class Talker(Router):
+    """Answers every prompt with two lines naming the model."""
+
+    async def chat(self, model, messages, tools, on_delta=None, single_tool=False, tool_choice="auto"):
+        self.seen.append((model, tool_choice, messages[-1]["content"]))
+        return {"choices": [{"message": {"content": f"{model} line one\nline two"}}], "usage": {}}
+
+
+def contest_arena(*typed):
+    from bamzooki.tournament import Seat
+
+    r = Talker()
+    a = arena(r, keyboard(*typed))
+    seats = [Seat("lab/alpha", "lab_alpha/Crusher@1"), Seat("lab/beta", "lab_beta/Stomper@2")]
+    a.entrants = {s.model: Entrant(s.model, messages=[]) for s in seats}
+    return a, r, seats
+
+
+def test_match_talk_routes_messages_and_enter_goes_on():
+    a, r, seats = contest_arena("/stomper nice legs", "good luck both", "/nobody hi", None)  # None: input ends
+    asyncio.run(a.match_talk(seats, "about to play", "to start the game"))
+    assert [m for m, *_ in r.seen] == ["lab/beta", "lab/alpha", "lab/beta"]  # /stomper, then both
+    assert all(choice == "none" for _, choice, _ in r.seen)
+    assert "nice legs" in r.seen[0][2] and "about to play" in r.seen[0][2]
+    reply = a.entrants["lab/beta"].messages[1]["content"]
+    assert reply == "lab/beta line one\nline two"  # replies to the audience aren't cut
+
+
+def test_remark_one_line_for_the_pre_match_comment():
+    a, r, seats = contest_arena()
+    assert asyncio.run(a.remark(seats[0], "boast", one_line=True)) == "lab/alpha line one"
+
+
+def test_previous_entries_are_archived(tmp_path):
+    from types import SimpleNamespace
+
+    zoo = tmp_path / "Zook Entries"
+    (zoo / "openai_gpt-5" / "Crusher").mkdir(parents=True)
+    (zoo / "openai_gpt-5" / "challenge-short.json").write_text("{}")
+    a = Arena.__new__(Arena)
+    a.cfg, a.arena_dir = SimpleNamespace(zoo_dir=zoo), tmp_path
+    dest = a.archive_entries()
+    assert dest.parent.parent == tmp_path / "Archive" and dest.name == "Zook Entries"
+    assert (dest / "openai_gpt-5" / "challenge-short.json").exists() and not any(zoo.iterdir())
+    assert a.archive_entries() is None  # nothing left to archive
+
+
+def test_presentation_saved_once_with_a_header(tmp_path):
+    from types import SimpleNamespace
+
+    from bamzooki.challenge import Challenge
+
+    a = arena(Talker(), keyboard())
+    a.cfg, a.challenge = SimpleNamespace(zoo_dir=tmp_path), Challenge.load()
+    a.entrant = e = Entrant("lab/alpha", messages=[{"role": "user", "content": "present"}], submitted=True,
+                            qualified=True, tokens=1234, cost=0.0123)
+    e.submission = {"design": "lab_alpha/Crusher@3", "outcome": "win", "score": 1.0, "status": "finished",
+                    "game": {"contest": "Zook Sumo", "opponent": "Spider"}, "video": "C:/v/Challenge game.mp4"}
+    asyncio.run(a.converse())  # the model's answer: "lab/alpha line one\nline two"
+    path = tmp_path / "lab_alpha" / f"Presentation - {a.challenge.name}.txt"
+    text = path.read_text(encoding="utf-8")
+    assert "Submitted Zook:  lab_alpha/Crusher@3" in text and "WIN, score 1.0" in text and "qualified" in text
+    assert "1,234 / $0.0123" in text and ".mp4" not in text  # no video links
+    assert text.endswith("lab/alpha line one\nline two\n") and e.presented
+    path.write_text("kept")
+    e.messages.append({"role": "user", "content": "a question afterwards"})
+    asyncio.run(a.converse())
+    assert path.read_text() == "kept"  # later answers don't replace the presentation
+
+
+def test_knockout_videos_copied_for_each_competitor(tmp_path):
+    from bamzooki.arena import _keep_video
+
+    src = tmp_path / "game.mp4"
+    src.write_bytes(b"mp4")
+    _keep_video(src, tmp_path / "lab_alpha" / "Videos", "Knockout Final game 1 - t - Zook Sumo - A vs B (lab/beta) - seed 3")
+    out = tmp_path / "lab_alpha" / "Videos" / "Knockout Final game 1 - t - Zook Sumo - A vs B (lab_beta) - seed 3.mp4"
+    assert out.read_bytes() == b"mp4"
+
+
 def test_verbose_shows_everything():
     long = " ".join(["w"] * 150)
     assert arena(Router(), keyboard(), verbose=True)._clip(long) == long
