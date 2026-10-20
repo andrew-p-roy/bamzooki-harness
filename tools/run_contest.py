@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from bamzooki import music  # noqa: E402
 from bamzooki.runner import Engine, Job, contests  # noqa: E402
 
 
@@ -51,6 +52,8 @@ def main() -> int:
     ap.add_argument("--position", choices=["right", "left", "center", "none"], default="none")
     ap.add_argument("--raw-overrides", action="store_true", help="disable the default behaviour fixes")
     ap.add_argument("--focus", choices=["launch", "idle", "always"], default="idle")
+    ap.add_argument("--music", metavar="TRACK", help="loop a track from Music/tracks.toml under the game from Go")
+    ap.add_argument("--countdown", action="store_true", help='the game\'s "3, 2, 1, Go!" over the game before it starts')
     a = ap.parse_args()
 
     engine = Engine()
@@ -64,7 +67,8 @@ def main() -> int:
     job = Job(info, zook_path(engine, a.green), zook_path(engine, a.red), seed=a.seed, duration=a.duration,
               stop_on_finish=not a.no_stop, record=a.record, video=a.video, camera=a.camera, view=a.view,
               window=tuple(int(x) for x in a.window.lower().split("x")) if a.window else None,
-              position=a.position, model=a.model)
+              position=a.position, model=a.model, countdown=a.countdown,
+              music=music.load_tracks()[a.music] if a.music else None)
     if a.raw_overrides:
         job.overrides = {}
     r = engine.run(job, focus=a.focus)

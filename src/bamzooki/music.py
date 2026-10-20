@@ -1,9 +1,10 @@
-"""Match music for the highlights reel: the tracks in Music/, their loop points, and which one a
-challenge gets.
+"""Match music for the knockout (live under each game, and in the highlights reel): the tracks in
+Music/, their loop points, and which one a challenge gets.
 
     Music/tracks.toml      one [tracks.<name>] table per track: file, loop points, tempo, tags
     pick_track(tracks, challenge)   the challenge's own `music = "<name>"`, else the first track
                                     tagged with its contest, else the default track
+    loop_wav(track, out)   the part that repeats, as a WAV
     analyse(mp3)           tempo, first beat, fade start and a loop of whole bars before the fade
                            (python tools/music.py analyse Music/<file>.mp3 prints a table to paste)
 
@@ -73,6 +74,20 @@ def pick_track(tracks: dict[str, Track], challenge=None) -> Track | None:
             if contest in t.tags:
                 return t
     return next((t for t in tracks.values() if t.default), next(iter(tracks.values())))
+
+
+def loop_wav(track: Track, out: Path, ffmpeg: str | None = None) -> Path | None:
+    """The track's loop (loop_start to loop_end) as a 48 kHz stereo WAV at `out`, or None."""
+    from .runner.video import VideoError, find_ffmpeg
+
+    end = f":end={track.loop_end}" if track.loop_end else ""
+    try:
+        res = subprocess.run([ffmpeg or find_ffmpeg(), "-y", "-loglevel", "error", "-i", str(Path(track.file).resolve()),
+                              "-af", f"atrim=start={track.loop_start}{end},asetpts=PTS-STARTPTS", "-ar", "48000",
+                              "-ac", "2", str(out)], capture_output=True)
+    except (VideoError, OSError):
+        return None
+    return out if res.returncode == 0 and Path(out).exists() else None
 
 
 # --- analysis -------------------------------------------------------------------------------

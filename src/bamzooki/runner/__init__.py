@@ -25,6 +25,7 @@ from pathlib import Path
 from ..codec import script, table
 from ..install import ENGINE_EXE, Install
 from . import _win
+from .audio import MatchAudio, video_sound
 from .contests import CONTEST_PATCHES, DEFAULT_OVERRIDES, ContestInfo, Verdict, find, judge, trajectories
 
 LUA_DIR = Path(__file__).with_name("lua")
@@ -38,6 +39,8 @@ PREVIEW_VIEWS = ("three_quarter", "front", "left", "top", "back", "right")
 # The Zook Kit's Test-mode trials: name -> (environment agent, time limit in sim seconds).
 TRIALS = {"sprint": ("SprintEnv", 20.0), "hurdles": ("Hurdles", 20.0), "lap": ("Lap", 60.0),
           "block_push": ("BlockPush", 13.0), "high_jump": ("HighJump", 10.0)}
+# The game's countdown strip ("3", "2", "1", "Go!"), shown by HarnessCountdown and drawn into videos.
+COUNTDOWN_PNG = "Agents/Governor/Countdown/Count.png"
 # Client area of the engine's default 900x700 window (the camera re-fits to the real area anyway).
 DEFAULT_CLIENT = (884, 662)
 
@@ -88,6 +91,19 @@ class Job:
     track_interval: float = 0.5
     model: str | None = None  # who designed/operates this run; renders go to <render_dir>/<model>/
     video_path: Path | None = None  # write the MP4 here instead (e.g. the entrant's Videos folder)
+    # The game's "3", "2", "1", "Go!" over the game up to Go, on screen and drawn into the video (the
+    # capture leaves out the GUI; while capturing, the countdown flickers on screen).
+    countdown: bool = False
+    countdown_size: float = 0.55  # of the window's shorter side
+    music: object = None  # a music.Track looped under the game from Go, fading out at the end (audio.py)
+    # The sound (the countdown's beeps, a beep on each count and higher on Go, and the music) is always
+    # in the video; live_sound also plays it on this computer while the game runs.
+    live_sound: bool = True
+
+    @property
+    def video_lead(self) -> float:
+        """Seconds of video before Go: 1, or with the countdown 3.5 (half a second, then 3, 2, 1)."""
+        return min(self.go_time, 3.5 if self.countdown else 1.0)
 
 
 def default_model() -> str:
@@ -115,6 +131,7 @@ class Result:
     video: Path | None = None
     error: str | None = None
     raw: dict = field(default_factory=dict)
+    video_lead: float = 1.0  # seconds of video before Go
 
     def trajectories(self) -> dict:
         return trajectories(self.raw) if self.raw else {}
@@ -181,6 +198,7 @@ class Engine:
         single = job.video or job.camera == "single"
         if job.video:
             frames_dir.mkdir(exist_ok=True)
+        classes = CLASSES + (["HarnessCountdown"] if job.countdown else [])
         spec = {
             "contest_file": job.contest.contest_file,
             "green": _posix(job.green) if job.green else None,
@@ -201,7 +219,7 @@ class Engine:
             "capture": 1 if job.video else 0,
             "capture_dir": _posix(frames_dir),
             "capture_fps": job.video_fps,
-            "capture_start": max(0.0, job.go_time - 1.0),
+            "capture_start": job.go_time - job.video_lead,
             "capture_ext": "hex",
             "overrides": job.overrides or None,
             "patches": (job.patches if job.patches is not None
@@ -210,7 +228,9 @@ class Engine:
             "record_bmv": _posix(run_dir / "replay.bmv"),
             "record_bvz": _posix(replay) if replay else None,
             "config": job.config or None,
-            "classes": {i + 1: c for i, c in enumerate(CLASSES)},
+            "classes": {i + 1: c for i, c in enumerate(classes)},
+            "countdown": 1 if job.countdown else 0,
+            "countdown_size": job.countdown_size,
             "window_title": f"BAMZOOKi harness - {job.contest.name}",
             "out": _posix(out),
             "log": _posix(run_dir / "driver_log.txt"),
@@ -224,7 +244,13 @@ class Engine:
         # Once the game has started, it ends at the time limit in real time: the driver stops it
         # itself, and if it can't (the engine paused or hung) we stop it a little later.
         after_go = (run_dir / "driver_log.txt", job.duration + job.finish_hold + GO_GRACE)
-        status, error, wall = self._launch(args, timeout, focus, job.window, job.position, after_go)
+        sound = MatchAudio(run_dir / "driver_log.txt", run_dir, beeps=job.countdown and job.live_sound,
+                           music=job.music if job.live_sound else None)
+        sound.start()
+        try:
+            status, error, wall = self._launch(args, timeout, focus, job.window, job.position, after_go)
+        finally:
+            sound.stop()
         raw: dict = {}
         if out.exists():
             raw = table.loads(out.read_text("latin-1"))
@@ -245,7 +271,10 @@ class Engine:
             try:
                 out_mp4 = job.video_path or render_path(self.render_dir, job.model or default_model(), parts, started)
                 Path(out_mp4).parent.mkdir(parents=True, exist_ok=True)
-                video = frames_to_mp4(frames_dir, Path(out_mp4), job.video_fps)
+                count = (self.root / COUNTDOWN_PNG, job.video_lead - 3, job.countdown_size) if job.countdown else None
+                video = frames_to_mp4(frames_dir, Path(out_mp4), job.video_fps, countdown=count)
+                if job.countdown or job.music:
+                    video_sound(video, job.video_lead - 3 if job.countdown else None, job.music, job.video_lead)
             except VideoError as e:
                 error = f"{error or ''}\nvideo: {e}".strip()
         go = raw.get("go_time", job.go_time)
@@ -257,7 +286,8 @@ class Engine:
             verdict=verdict,
             finish_time=(ft - go) if isinstance(ft, (int, float)) and ft >= 0 else None,
             sim_time=raw.get("sim_time", 0.0), wall_time=wall, run_dir=run_dir,
-            replay=replay if replay and replay.exists() else None, video=video, error=error, raw=raw)
+            replay=replay if replay and replay.exists() else None, video=video, error=error, raw=raw,
+            video_lead=job.video_lead)
         if video:
             _write_sidecar(video, job, result)
         return result
@@ -561,7 +591,7 @@ def _write_sidecar(video: Path, job: Job, r: Result) -> None:
         "green_file": str(job.green) if job.green else None, "red_file": str(job.red) if job.red else None,
         "seed": job.seed, "status": r.status, "winner": r.winner, "scores": r.scores,
         "decided_by": v.decided_by if v else None, "fell": v.fell if v else {},
-        "finish_after_go_s": r.finish_time, "sim_s": r.sim_time, "wall_s": round(r.wall_time, 1),
+        "finish_after_go_s": r.finish_time, "video_lead_s": r.video_lead, "sim_s": r.sim_time, "wall_s": round(r.wall_time, 1),
         "view": job.view if isinstance(job.view, str) else "custom", "fps": job.video_fps,
         "run_dir": str(r.run_dir), "replay": str(r.replay) if r.replay else None,
     }

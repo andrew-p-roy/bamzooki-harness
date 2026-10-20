@@ -120,6 +120,42 @@ def test_frames_to_mp4(tmp_path):
     assert out.stat().st_size > 0 and not list(tmp_path.glob("*.hex"))
 
 
+def test_frames_to_mp4_draws_the_countdown(tmp_path):
+    import shutil
+    import subprocess
+
+    from bamzooki.runner.video import frames_to_mp4
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    for k in (0, 149):  # 6 s of black at 25 fps (the gap repeats frame 0)
+        (frames / f"frame_{k:06d}.hex").write_text("08080800" + "0010" + "0010" + "000000" * 256)
+    strip = tmp_path / "Count.png"  # four opaque white cells, like the game's "3", "2", "1", "Go!"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=white:s=64x16", "-frames:v", "1",
+                    str(strip)], check=True)
+    out = frames_to_mp4(frames, tmp_path / "t.mp4", fps=25, countdown=(strip, 1.0, 1.0))
+
+    def grey(t):
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", str(t), "-i", str(out), "-frames:v", "1", "-f", "rawvideo",
+                              "-pix_fmt", "gray", "-"], capture_output=True, check=True).stdout
+        return sum(raw) / len(raw)
+
+    assert grey(0.5) < 20  # before "3"
+    assert grey(1.04) > 200 and grey(3.04) > 200  # each count lands at full strength...
+    assert 60 < grey(2.5) < 200  # ...and fades over its second
+    assert grey(5.5) < 20  # gone after "Go!"
+
+
+def test_video_lead():
+    from bamzooki.runner import Job
+
+    assert Job(None).video_lead == 1.0
+    assert Job(None, countdown=True).video_lead == 3.5  # room for 3, 2, 1 before Go
+    assert Job(None, countdown=True, go_time=2.0).video_lead == 2.0
+
+
 @pytest.mark.install
 def test_catalog(install):
     cat = contests.catalog(install)
@@ -246,3 +282,23 @@ def test_arena_sees_a_submission():
     a.entrant = Entrant("some/model", False)
     a._summarise("submit_design", json.dumps({"design": "x/Bot@1", "outcome": "draw", "score": 0.5}))
     assert a.entrant.submitted
+
+
+def test_countdown_cues_in_the_driver_log():
+    from bamzooki.runner.audio import log_events
+
+    log = ("   2.020 contest created\n   3.308 countdown 3\n   4.309 countdown 2\n   5.286 countdown 1\n"
+           "   6.288 countdown go\n   6.344 go at sim 4.05\n   7.288 countdown end\n  14.346 done: timeout\n")
+    assert log_events(log) == ["3", "2", "1", "go", "start", "done"]
+    assert log_events("   3.308 countdown 3\n   4.309 countd") == ["3"]  # a line still being written waits
+
+
+def test_beep_wav(tmp_path):
+    import wave
+
+    from bamzooki.runner.audio import RATE, beep_wav
+
+    with wave.open(str(beep_wav(tmp_path / "b.wav", 660, 0.2))) as w:
+        assert w.getframerate() == RATE and w.getnframes() == int(RATE * 0.2)
+        frames = w.readframes(w.getnframes())
+    assert frames[:2] == b"\x00\x00" and max(frames) > 0  # starts silent (no click), then sounds

@@ -89,11 +89,54 @@ def test_reel_music_under_games_and_silent_cards(tmp_path):
     out = showtime.highlights(games, tmp_path / "reel.mp4", champion=("a/x", "X"), music=track)
     probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0",
                             str(out)], capture_output=True, text=True).stdout.split()
-    assert probe == ["video", "audio"] and abs(video_duration(out) - (2 * 3 + 2 * 2 + 4)) < 0.3
+    assert probe == ["video", "audio"] and abs(video_duration(out) - (0.5 + 2 * 3 + 2 * 2 + 4 + 2 * 1)) < 0.3  # + black
 
     def level(start, seconds):
         r = subprocess.run([exe, "-hide_banner", "-ss", str(start), "-t", str(seconds), "-i", str(out), "-vn", "-af",
                             "volumedetect", "-f", "null", "-"], capture_output=True, text=True).stderr
         return float(r.split("max_volume: ")[1].split(" dB")[0])
-    assert level(0.2, 2.5) < -80  # the title card is silent
-    assert level(3.1, 0.8) > -20  # the beat plays under the game
+    assert level(0.2, 2.8) < -80  # the black and the title card are silent
+    assert level(3.6, 0.8) > -20  # the beat plays under the game
+
+
+def _level(exe, video, start, seconds):
+    r = subprocess.run([exe, "-hide_banner", "-ss", str(start), "-t", str(seconds), "-i", str(video), "-vn", "-af",
+                        "volumedetect", "-f", "null", "-"], capture_output=True, text=True).stderr
+    return float(r.split("max_volume: ")[1].split(" dB")[0])
+
+
+def _blue(exe, path, seconds):
+    subprocess.run([exe, "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"color=c=blue:s=320x240:r=25:d={seconds}",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(path)], check=True)
+    return path
+
+
+def test_game_video_gets_the_beeps_and_the_music_from_go(tmp_path):
+    from bamzooki.runner.audio import video_sound
+    from bamzooki.runner.video import has_audio, video_duration
+
+    exe = ffmpeg()
+    video = _blue(exe, tmp_path / "game.mp4", 8)
+    track = music.Track("hum", tmp_path / "hum.wav", 0.0, 1.0)  # a 1 s loop of a steady tone
+    subprocess.run([exe, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=f=220:d=1", str(track.file)], check=True)
+    assert not has_audio(video)
+    video_sound(video, countdown_at=0.5, music=track, music_from=3.5)  # as with go at 3.5 s of video
+    assert has_audio(video) and abs(video_duration(video) - 8) < 0.1
+    assert _level(exe, video, 0.0, 0.4) < -80  # quiet before "3"
+    assert _level(exe, video, 0.5, 0.2) > -30 and _level(exe, video, 1.5, 0.2) > -30  # the beeps
+    assert _level(exe, video, 0.8, 0.6) < -80  # between beeps, before Go: no music yet
+    assert _level(exe, video, 5.0, 1.5) > -30  # the music loops on from Go
+
+
+def test_reel_keeps_a_games_own_sound(tmp_path):
+    from bamzooki.runner.audio import video_sound
+
+    exe = ffmpeg()
+    if not showtime.find_font():
+        pytest.skip("no font for titles")
+    video = video_sound(_blue(exe, tmp_path / "game.mp4", 3), countdown_at=0.0)  # beeps at 0, 1, 2 s; no music
+    track = music.Track("beat", clicks(tmp_path / "beat.mp3", 120, 6), 0.0, 4.0)
+    out = showtime.highlights([showtime.ReelGame(video, "Final", ("a/x", "X"), ("b/y", "Y"))], tmp_path / "reel.mp4",
+                              music=track)
+    assert _level(exe, out, 3.5, 0.15) > -30  # the game's own first beep, after the black and the 3 s card
+    assert _level(exe, out, 3.8, 0.6) < -80  # and no reel music laid over it

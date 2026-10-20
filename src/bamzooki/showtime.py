@@ -374,22 +374,22 @@ def image_part(png: str | Path, detail: str | None = None) -> dict | None:
 END_LABELS = "Go | 4 s before the end / just before the end | the end"
 
 
-def end_of_game_times(finish_after_go: float | None, duration: float) -> list[float]:
-    """Video times (s) for the end-of-game sheet. Videos start 1 s before Go. Without a finish
-    (a draw at the time limit) the end of the video is the end of the game."""
-    end = duration if finish_after_go is None else min(duration, 1.0 + finish_after_go)
-    return [1.0, max(1.0, end - 4.0), max(1.0, end - 1.0), min(duration, end + 1.5) if finish_after_go is not None
+def end_of_game_times(finish_after_go: float | None, duration: float, lead: float = 1.0) -> list[float]:
+    """Video times (s) for the end-of-game sheet. Videos start `lead` s before Go (1 s, or 3.5 s with
+    the countdown). Without a finish (a draw at the time limit) the end of the video is the end of the game."""
+    end = duration if finish_after_go is None else min(duration, lead + finish_after_go)
+    return [lead, max(lead, end - 4.0), max(lead, end - 1.0), min(duration, end + 1.5) if finish_after_go is not None
             else duration]
 
 
-def end_of_game_stills(video: Path, finish_after_go: float | None, out: Path) -> Path | None:
+def end_of_game_stills(video: Path, finish_after_go: float | None, out: Path, lead: float = 1.0) -> Path | None:
     """A 2x2 sheet of how a game ended (END_LABELS), or None if ffmpeg can't make one."""
     from .runner.video import VideoError, contact_sheet, video_duration
 
     try:
         dur = video_duration(Path(video))
         out.parent.mkdir(parents=True, exist_ok=True)
-        return contact_sheet(Path(video), end_of_game_times(finish_after_go, dur), out)
+        return contact_sheet(Path(video), end_of_game_times(finish_after_go, dur, lead), out)
     except (VideoError, OSError, ValueError):
         return None
 
@@ -486,17 +486,20 @@ def _probe(video: Path) -> tuple[int, int, str] | None:
 
 def titled_reel(games: list[ReelGame], out: Path, champion: tuple[str, str] | None = None,
                 card_seconds: float = 3.0, font: Path | None = None, music=None,
-                music_fade: float = 1.0) -> Path | None:
+                music_fade: float = 1.0, gap_seconds: float = 1.0, lead_seconds: float = 0.5) -> Path | None:
     """The games one after another, each after a title card (the round and game, then each Zook in
     its arena colour with its model's name) and with a caption bar naming both while it plays,
-    then a champion card. With `music` (a music.Track) its loop plays under each game from the top
-    and fades out over `music_fade` seconds as the game ends; the cards are silent. Made by ffmpeg
+    then a champion card. It opens on `lead_seconds` of black, `gap_seconds` of black separate the
+    matches (and come before the champion card), and each card fades in from the black. A game with its own sound (the countdown's beeps and the music from Go)
+    keeps it; under one without, `music` (a music.Track) loops from the top and fades out over
+    `music_fade` seconds as the game ends. The cards are silent. Made by ffmpeg
     alone (no model calls). None if it can't be made."""
     import shutil
     import subprocess
     import tempfile
 
-    from .runner.video import VideoError, find_ffmpeg, video_duration
+    from .music import loop_wav
+    from .runner.video import VideoError, find_ffmpeg, has_audio, video_duration
 
     games = [g for g in games if g.video and Path(g.video).exists()]
     font = font or find_font()
@@ -515,7 +518,9 @@ def titled_reel(games: list[ReelGame], out: Path, champion: tuple[str, str] | No
     with tempfile.TemporaryDirectory() as tmp:
         folder = Path(tmp)
         shutil.copyfile(font, folder / "font.ttf")
-        loop = _music_loop(exe, music, folder) if music else None
+        own = [has_audio(Path(g.video), exe) for g in games]
+        loop = loop_wav(music, folder / "loop.wav", exe) if music and not all(own) else None
+        sound = bool(loop) or any(own)
         t = _Titles(folder)
         inputs, chains, parts = [], [], []
         silence = "anullsrc=channel_layout=stereo:sample_rate=48000,atrim=0:{:.3f}"
@@ -525,7 +530,17 @@ def titled_reel(games: list[ReelGame], out: Path, champion: tuple[str, str] | No
             inputs.extend(args)
             return inputs.count("-i") - 1
 
+        def gap(name: str, seconds: float) -> None:
+            """A silent stretch of black before the next card."""
+            if seconds > 0:
+                chains.append(f"color=c=black:s={w}x{h}:r={fps}:d={seconds},format=yuv420p,setsar=1[{name}]")
+                parts.append(f"[{name}]")
+                if sound:
+                    chains.append(silence.format(seconds) + f"[{name}a]")
+                    parts[-1] = f"[{name}][{name}a]"
+
         for i, g in enumerate(games):
+            gap(f"k{i}", gap_seconds if i else lead_seconds)
             v = add_input("-i", str(Path(g.video).resolve()))
             chains.append(_card(t, w, h, fps, card_seconds, [
                 (g.title, h // 14, WHITE, 0.16),
@@ -535,45 +550,39 @@ def titled_reel(games: list[ReelGame], out: Path, champion: tuple[str, str] | No
             chains.append(",".join([f"[{v}:v]scale={w}:{h}", "setsar=1", f"fps={fps}", "format=yuv420p",
                                     *_caption(t, w, h, g)]) + f"[g{i}]")
             parts += [f"[c{i}]", f"[g{i}]"]
-            if loop:
-                # the loop again for every game, from its top, cut to the game's length
-                k = add_input("-stream_loop", "-1", "-i", loop.name)
+            if sound:
                 seconds = video_duration(Path(g.video))
-                fade = min(music_fade, seconds / 2)
+                stereo = "aformat=sample_rates=48000:channel_layouts=stereo"
+                if own[i]:  # its own sound, cut to the picture's length
+                    chains.append(f"[{v}:a]apad,atrim=0:{seconds:.3f},{stereo}[ga{i}]")
+                elif loop:  # the loop again for every game, from its top, cut to the game's length
+                    k = add_input("-stream_loop", "-1", "-i", loop.name)
+                    fade = min(music_fade, seconds / 2)
+                    chains.append(f"[{k}:a]atrim=0:{seconds:.3f},asetpts=PTS-STARTPTS,volume={music.volume},"
+                                  f"afade=t=in:st=0:d=0.03,afade=t=out:st={seconds - fade:.3f}:d={fade:.3f},"
+                                  f"{stereo}[ga{i}]")
+                else:
+                    chains.append(silence.format(seconds) + f"[ga{i}]")
                 chains.append(silence.format(card_seconds) + f"[ca{i}]")
-                chains.append(f"[{k}:a]atrim=0:{seconds:.3f},asetpts=PTS-STARTPTS,volume={music.volume},"
-                              f"afade=t=in:st=0:d=0.03,afade=t=out:st={seconds - fade:.3f}:d={fade:.3f},"
-                              f"aformat=sample_rates=48000:channel_layouts=stereo[ga{i}]")
                 parts[-2:] = [f"[c{i}][ca{i}]", f"[g{i}][ga{i}]"]
         if champion:
+            gap("kc", gap_seconds)
             chains.append(_card(t, w, h, fps, card_seconds + 1, [
                 ("CHAMPION", h // 9, GOLD, 0.25), (champion[1], h // 8, WHITE, 0.43),
                 (champion[0], h // 20, GREY, 0.6)]) + "[champ]")
             parts.append("[champ]")
-            if loop:
+            if sound:
                 chains.append(silence.format(card_seconds + 1) + "[champa]")
                 parts[-1] = "[champ][champa]"
-        streams = "[out][aout]" if loop else "[out]"
-        chains.append("".join(parts) + f"concat=n={len(parts)}:v=1:a={1 if loop else 0}{streams}")
+        streams = "[out][aout]" if sound else "[out]"
+        chains.append("".join(parts) + f"concat=n={len(parts)}:v=1:a={1 if sound else 0}{streams}")
         cmd = [exe, "-y", "-loglevel", "error", *inputs, "-filter_complex", ";".join(chains), "-map", "[out]",
-               *(["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"] if loop else []),
+               *(["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"] if sound else []),
                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-movflags", "+faststart", str(out)]
         try:
             res = subprocess.run(cmd, cwd=folder, capture_output=True)
         except OSError:
             return None
-    return out if res.returncode == 0 and out.exists() else None
-
-
-def _music_loop(exe: str, track, folder: Path) -> Path | None:
-    """The track's loop (loop_start to loop_end) as loop.wav in `folder`, or None."""
-    import subprocess
-
-    end = f":end={track.loop_end}" if track.loop_end else ""
-    out = folder / "loop.wav"
-    res = subprocess.run([exe, "-y", "-loglevel", "error", "-i", str(Path(track.file).resolve()), "-af",
-                          f"atrim=start={track.loop_start}{end},asetpts=PTS-STARTPTS", "-ar", "48000", "-ac", "2",
-                          str(out)], capture_output=True)
     return out if res.returncode == 0 and out.exists() else None
 
 

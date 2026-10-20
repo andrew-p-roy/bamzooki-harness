@@ -70,6 +70,7 @@ def test_end_of_game_times():
     assert showtime.end_of_game_times(5.0, 12.0) == [1.0, 2.0, 5.0, 7.5]  # finish at 6 s of video
     assert showtime.end_of_game_times(None, 121.0) == [1.0, 117.0, 120.0, 121.0]  # time limit: the end
     assert showtime.end_of_game_times(0.5, 4.0)[1:3] == [1.0, 1.0]  # never before Go
+    assert showtime.end_of_game_times(5.0, 14.5, lead=3.5) == [3.5, 4.5, 7.5, 10.0]  # with the countdown
 
 
 def test_image_part(tmp_path):
@@ -203,7 +204,9 @@ def test_titled_reel(tmp_path):
                                ("x/beta's", "Stomper"), ("lab/alpha-100%", "Crusher"))]
     out = showtime.highlights(games, tmp_path / "reel.mp4", champion=("lab/alpha-100%", "Crusher"))
     assert out == (tmp_path / "reel.mp4").resolve()
-    assert abs(video_duration(out) - (2 * 3 + 2 * 1 + 4)) < 0.3  # two cards, two games, the champion card
+    # two cards, two games, the champion card; half a second of black first, and a second before the
+    # second card and the champion's
+    assert abs(video_duration(out) - (2 * 3 + 2 * 1 + 4 + 0.5 + 2 * 1)) < 0.3
 
 
 def test_reel_without_a_font_is_just_joined(tmp_path):

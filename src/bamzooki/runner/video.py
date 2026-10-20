@@ -88,6 +88,14 @@ def video_duration(mp4: Path, ffmpeg: str | None = None) -> float:
     return float(res.stdout.strip() or 0)
 
 
+def has_audio(mp4: Path, ffmpeg: str | None = None) -> bool:
+    probe = Path(find_ffmpeg(ffmpeg)).with_name("ffprobe" + Path(find_ffmpeg(ffmpeg)).suffix)
+    res = subprocess.run([str(probe if probe.exists() else "ffprobe"), "-v", "error", "-select_streams", "a",
+                          "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(mp4)],
+                         capture_output=True, text=True)
+    return "audio" in res.stdout
+
+
 def contact_sheet(mp4: Path, times: list[float], out: Path, width: int = 1024, ffmpeg: str | None = None) -> Path:
     """One PNG with up to four stills from a video in a 2x2 grid (left-right, top-bottom)."""
     exe = find_ffmpeg(ffmpeg)
@@ -108,16 +116,42 @@ def contact_sheet(mp4: Path, times: list[float], out: Path, width: int = 1024, f
     return out
 
 
+def countdown_filter(start: float, size: float, w: int, h: int) -> str:
+    """Filter graph drawing the game's countdown strip (input 1: Count.png, four cells "3", "2", "1",
+    "Go!") over input 0 as the engine shows it live: from `start` s one cell a second, each fading
+    out over its second, centred, `size` of the shorter side. Output [v]."""
+    side = int(size * min(w, h)) // 2 * 2
+    x, y = (w - side) // 2, (h - side) // 2
+    cells = "".join(f"[s{i}]" for i in range(4))
+    chains = [f"[1:v]format=rgba,split=4{cells}"]
+    base = "[0:v]"
+    for i in range(4):
+        t = start + i
+        chains.append(f"[s{i}]crop=iw/4:ih:{i}*iw/4:0,scale={side}:{side}:flags=bilinear,"
+                      f"fade=t=out:st={t:.3f}:d=1:alpha=1[c{i}]")
+        chains.append(f"{base}[c{i}]overlay={x}:{y}:shortest=1:enable='between(t,{t:.3f},{t + 1:.3f})'[o{i}]")
+        base = f"[o{i}]"
+    chains.append(f"{base}pad=ceil(iw/2)*2:ceil(ih/2)*2[v]")
+    return ";".join(chains)
+
+
 def frames_to_mp4(frames_dir: Path, out: Path, fps: float, ffmpeg: str | None = None, crf: int = 20,
-                  keep_frames: bool = False) -> Path:
+                  keep_frames: bool = False, countdown: tuple[Path, float, float] | None = None) -> Path:
+    """Encode the captured frames. countdown = (Count.png, video time of "3", size): draw the game's
+    countdown over the video (the engine's capture leaves out its on-screen GUI)."""
     frames = frame_files(frames_dir)
     if not frames:
         raise VideoError(f"no frames in {frames_dir}")
     seq = sequence(frames)
     w, h, _ = decode_hex_frame(seq[0].read_text("ascii"))
+    if countdown and Path(countdown[0]).is_file():
+        graph = ["-loop", "1", "-framerate", str(fps), "-i", str(countdown[0]),
+                 "-filter_complex", countdown_filter(countdown[1], countdown[2], w, h), "-map", "[v]"]
+    else:
+        graph = ["-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"]
     cmd = [find_ffmpeg(ffmpeg), "-y", "-loglevel", "error",
            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "-",
-           "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+           *graph, "-c:v", "libx264", "-pix_fmt", "yuv420p",
            "-crf", str(crf), "-movflags", "+faststart", str(out)]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     cache: tuple[Path, bytes] | None = None

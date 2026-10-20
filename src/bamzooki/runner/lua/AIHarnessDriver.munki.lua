@@ -9,6 +9,8 @@
 -- video, and the game must still end on time), stop_on_finish,
 -- finish_hold, update_interval, track_interval, overrides = { BehaviourName = { param = value } },
 -- record (0/1), record_bmv, record_bvz,
+-- countdown (0/1): a HarnessCountdown over the game ("3", "2", "1", "Go!" up to Go; camera 1 or 3),
+-- countdown_size of the window's shorter side; each count is logged ("countdown 3" ... "countdown go"),
 -- camera: 1 = the game's SplitScreen (5 views) + lights, 2 = 2x2-pixel camera (no picture),
 --         3 = one full-window HarnessCamera + lights, with view = { zook, offset, angle } and optional
 --             frame capture (capture = 1, capture_dir, capture_fps, capture_start; size = window_w/h).
@@ -148,7 +150,19 @@ function Setup()
 		CreateLights()
 	end
 	World.CloseAccess()
+	if myJob.countdown == 1 and (myJob.camera == 1 or myJob.camera == 3) then
+		myCountdown = Agent.Create("HarnessCountdown", myWorld, myJob.go_time, myJob.countdown_size,
+			Agent.Me())
+	end
 	HLog("contest created")
+end
+
+-- From the HarnessCountdown: "3", "2", "1", "go" as each shows (the runner beeps on these), then "end".
+function MessageCountdownStep(label)
+	HLog("countdown " .. label)
+	if label == "end" then
+		myCountdown = nil
+	end
 end
 
 -- Same lighting as the game's ContestRunnerContest (call inside World.OpenAccess).
@@ -166,6 +180,10 @@ function CreateLights()
 end
 
 function CleanUp()
+	if myCountdown ~= nil then
+		Agent.SendMessage("Destroy", myCountdown)
+		myCountdown = nil
+	end
 	if myWorld ~= nil then
 		if myCamera ~= nil then
 			Agent.SendMessage("Destroy", myCamera)

@@ -437,7 +437,7 @@ def bout_of(seats, stats="finished, 9 s simulated | decided by fall"):
 def fake_stills(monkeypatch, made):
     from bamzooki import showtime
 
-    def stills(video, finish, out):
+    def stills(video, finish, out, lead=1.0):
         out.write_bytes(b"\x89PNG")
         made.append((video, finish, out))
         return out

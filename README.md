@@ -71,7 +71,9 @@ Tips:
     challenger with its maker, release month and year, country and some trivia, then calls the games;
   - in the knockout the models **see each other's Zooks** and trade a line before each match, and
     afterwards they're interviewed with stills of how the game ended;
-  - the champion gives a victory speech.
+  - the champion gives a victory speech;
+  - knockout games play their **sound** live (Windows): a starting beeper on the countdown and the
+    match music looping under the game from Go (the videos and highlights have it either way).
 
   With it, `--speak` reads the announcer aloud (Windows speech; try
   `--voice "Microsoft Hazel Desktop"`), and `--announcer-style documentary` changes the host.
@@ -309,7 +311,14 @@ Zook), and the second one hears the first. You can talk to them before the game 
 (with or without `--showtime`): `/<name> <message>` talks
 to one model (its model name, the part after the `/`, or its Zook's name; any part of a name only one of them has will do, e.g. `/nano`),
 plain text goes to both, and Enter plays on. Each game's result (scores, how it was decided,
-finish time, falls) is printed. Winners play winners until one is left. The ranking follows the round each model went
+finish time, falls) is printed. Every game starts with the game's own countdown, a big "3, 2, 1,
+Go!" over the arena (also in the video; `tools/run_contest.py --countdown` for a single game).
+Each game video has sound: a starting beeper (a beep on each count and a higher one on Go), then
+from Go the challenge's match music looping under the game and fading out as it ends; the
+highlights reel keeps it. With `--showtime` the same sound also plays live on your speakers
+(Windows). `tools/run_contest.py --music synth_funk` for a single game; the beeps come with
+`--countdown`.
+Winners play winners until one is left. The ranking follows the round each model went
 out in. The champion takes your questions at the `you>` prompt; with `--showtime` it first gives a
 short victory speech. Videos
 are saved to `Renders/Tournament/`, along with a highlights reel of every game, which `/open`
@@ -318,8 +327,9 @@ plays. The reel is made by ffmpeg alone, with no model calls and no tokens:
   colour (green/red) with its model underneath;
 - a caption bar names both Zooks while the game plays;
 - it ends on a champion card;
-- **music** plays under every game and fades out over a second as the game ends; the cards are
-  silent.
+- each game keeps its own sound: the countdown's beeps, then the **music** from Go, fading out
+  over a second as the game ends (a game video without sound gets the music from its top); the
+  cards are silent.
 
 The music is in [`Music/`](Music/tracks.toml): original 30 s instrumental clips made with Google's
 Lyria 3 through OpenRouter, so there are no copyright claims. Each track has loop points: whole
@@ -442,7 +452,7 @@ src/bamzooki/
   announcer.py  the show's host (introductions, calls, interviews)
   showtime.py   model fact sheets, Zook cards, end-of-game stills, Hall of Fame, highlights
   voice.py      --speak: the announcer read aloud by the system's speech engine
-  music.py      the highlights reel's music: tracks, loop points, the track for a challenge
+  music.py      match music (live and in the reel): tracks, loop points, the track for a challenge
 Music/          match music (Lyria 3 clips) and tracks.toml (loop points, tags, default)
 Model Instructions/  agent prompt, design guide, your manual copy (what models are told)
 challenges/     challenge files (task, budget, evaluation game)

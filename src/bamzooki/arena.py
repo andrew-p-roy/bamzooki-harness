@@ -36,7 +36,9 @@ predicts the winner.
 anthropic/claude-haiku-5.5; --no-announcer) introduces each challenger (maker, release month,
 country, trivia) and calls the games (--speak reads it aloud); in the knockout both models see the
 other's Zook and say a line before each match, and afterwards they are interviewed with stills of
-how the game ended; returning champions' Hall of Fame records are mentioned.
+how the game ended; returning champions' Hall of Fame records are mentioned. Its knockout games
+also play their sound live: a starting beeper on the countdown and the match music looping from Go
+(the game videos and the highlights have it either way).
 
 --verbose streams its reasoning and notes as it writes them and shows them, and its tool
 arguments, in full (normally each reply is shown when complete, cut to 100 words).
@@ -736,6 +738,7 @@ class Arena:
         zoo = Zoo(engine.install, examples_root=engine.root / "Teams" / "examples" / "Creatures")
         info = contests.find(self.challenge.evaluation.contest, engine.install)
         event = f"{info.name} {'exhibition' if exhibition else 'knockout'}"
+        track = music.pick_track(music.load_tracks(), self.challenge)  # live under each game, and in the reel
 
         now = {"round": "", "game": 0, "last": None}  # video titles; the last game's (video, finish)
         reel: list[showtime.ReelGame] = []  # every game, for the highlights
@@ -745,10 +748,11 @@ class Arena:
 
         def play(green: tournament.Seat, red: tournament.Seat, seed: int) -> tuple[str, str | None, str]:
             job = Job(info, zoo.resolve(green.zook).path, zoo.resolve(red.zook).path, seed=seed,
-                      duration=self.challenge.time_limit, video=True, model="Tournament")
+                      duration=self.challenge.time_limit, video=True, model="Tournament", countdown=True,
+                      music=track, live_sound=self.show)  # the videos get the sound either way
             r = engine.run(job, name=f"cup-{info.contest_file}")
             now["game"] += 1
-            now["last"] = (r.video, r.finish_time) if r.video else None
+            now["last"] = (r.video, r.finish_time, r.video_lead) if r.video else None
             if r.video:  # for the highlights, and a copy for each competitor beside its test videos
                 reel.append(showtime.ReelGame(r.video, f"{event} - {now['round']} - game {now['game']}",
                                               (green.model, green.zook_name), (red.model, red.zook_name)))
@@ -824,7 +828,6 @@ class Arena:
         reel_path = None
         if len(reel) > 1:
             name = f"{time.strftime('%Y-%m-%d_%H-%M-%S')} Knockout highlights - {self.challenge.name} - {info.name}.mp4"
-            track = music.pick_track(music.load_tracks(), self.challenge)
             if reel_path := showtime.highlights(reel, self.cfg.render_dir / "Tournament" / name,
                                                 champion=(champ.model, champ.zook_name), music=track):
                 say(f"    highlights: {reel_path}  (/open plays it)", "dim")
@@ -916,7 +919,7 @@ class Arena:
         game = bout.games[-1] if bout.games else None
         stills = None
         if last and last[0]:
-            stills = showtime.end_of_game_stills(last[0], last[1], folder / f"end-{time.time_ns()}.png")
+            stills = showtime.end_of_game_stills(last[0], last[1], folder / f"end-{time.time_ns()}.png", *last[2:])
         picture = showtime.image_part(stills) if stills else None
         try:
             if self.announcer and game:
