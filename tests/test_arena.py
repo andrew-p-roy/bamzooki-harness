@@ -34,6 +34,7 @@ class Router:
 def arena(router, kb, verbose=False):
     a = Arena.__new__(Arena)
     a.router, a.keyboard, a.verbose, a.max_turns, a.tools, a.skip = router, kb, verbose, 10, [], False
+    a.ending, a.knockout_places = False, {}
     a.entrant = Entrant("lab/model", messages=[{"role": "user", "content": "go"}], submitted=True)
 
     async def run_tool(call):
@@ -381,6 +382,42 @@ def test_knockout_videos_copied_for_each_competitor(tmp_path):
     _keep_video(src, tmp_path / "lab_alpha" / "Videos", "Knockout Final game 1 - t - Zook Sumo - A vs B (lab/beta) - seed 3")
     out = tmp_path / "lab_alpha" / "Videos" / "Knockout Final game 1 - t - Zook Sumo - A vs B (lab_beta) - seed 3.mp4"
     assert out.read_bytes() == b"mp4"
+
+
+def test_end_summary_table(tmp_path, capsys):
+    from types import SimpleNamespace
+
+    from bamzooki.challenge import Challenge
+
+    a = arena(Talker(), keyboard())
+    a.cfg, a.arena_dir, a.challenge = SimpleNamespace(zoo_dir=tmp_path / "zoo"), tmp_path, Challenge.load()
+    a.entrants = {
+        "lab/alpha": Entrant("lab/alpha", design="lab_alpha/Crusher@3", qualified=True, tokens=120_000, cost=0.5,
+                             submission={"outcome": "win", "score": 1.0, "status": "finished"}),
+        "lab/beta": Entrant("lab/beta", design="lab_beta/Stomper@1", tokens=8_000, cost=0.0123,
+                            submission={"outcome": "draw", "score": 0.5, "status": "timeout"}),
+        "lab/gamma": Entrant("lab/gamma", tokens=500, cost=0.0001),
+    }
+    a.knockout_places = {"lab/alpha": 1}
+    path = a.summary()
+    text = path.read_text(encoding="utf-8")
+    assert path.parent == tmp_path / "Sessions"
+    for want in ("Crusher@3", "WIN", "DRAW (time limit)", "not submitted", "1st", "120,000", "$0.5000",
+                 "1 qualified", "128,500", "$0.5124", "0 of 20"):
+        assert want in text, want
+    widths = {len(line) for line in text.splitlines()[2:] if line}
+    assert len(widths) == 1  # every row of the table lines up
+    assert "TOTAL" in capsys.readouterr().out
+
+
+def test_places_and_end_while_working():
+    from bamzooki.arena import _place
+
+    places = {"a": 1, "b": 2, "c": 3, "d": 3}
+    assert [_place(places, m) for m in "abcdx"] == ["1st", "2nd", "=3rd", "=3rd", "-"]
+    a = arena(Router(calls=5), keyboard("/end"))
+    asyncio.run(a.converse())
+    assert a.ending and len(a.router.seen) == 0  # halted before its next request
 
 
 def test_verbose_shows_everything():

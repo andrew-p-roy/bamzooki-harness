@@ -46,6 +46,7 @@ calling, from [openrouter.ai/models](https://openrouter.ai/models)):
 | `/contest` | Knockout tournament between the Zooks that **won** their challenge game this session. The champion then gives a speech and takes your questions |
 | `/open` | Plays the current model's latest video |
 | `/status` | The current model's runs left |
+| `/end` | Finishes the session: one table of every model's Zook, result, test runs, knockout place, tokens and cost (with totals), saved to `Sessions/`. Enter then quits |
 | `/list`, `/help`, `/quit` | The queue, the commands, leave |
 
 Tips:
@@ -229,6 +230,7 @@ Zook Entries/<model>/Presentation - <challenge>.txt           its presentation, 
 Renders/Tournament/..., Renders/<name>/...                    knockout games; runs from the tools/ scripts
 Transcripts/<model>/<timestamp>.md (+ .mcp.log)              arena conversations (+ the MCP server's own log)
 Archive/<date_time>/Zook Entries/...                          earlier arena runs' entries (moved at start)
+Sessions/<date_time>.txt                                      the /end table of each session
 ```
 
 The same features are available in Python via `bamzooki.studio.Studio`.
@@ -258,6 +260,7 @@ At the `you>` prompt:
 | `/contest` | knockout tournament between this session's qualified Zooks (see below) |
 | `/status` | the current challenger's budget and submissions |
 | `/open` | open its latest video and stills |
+| `/end` | finish with the session table (also saved to `Sessions/<date_time>.txt`), then Enter quits; works while a model is working too |
 | `/list`, `/help`, `/quit` | queue, commands, leave |
 | anything else | a message to the current challenger ("why four legs?", "try a heavier one") |
 

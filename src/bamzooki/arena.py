@@ -15,6 +15,8 @@ prompt to talk to it. Commands:
     /open                 open the current entrant's latest video and stills
     /contest              knockout tournament between this session's qualified Zooks (a model
                           qualifies by WINNING its challenge game); the winner then makes a speech
+    /end                  finish: a table of every model's result, runs, tokens and cost (saved to
+                          Sessions/), then Enter quits
     /list                 the queue                         /quit                leave
     anything else         a message to the current model (it may use its tools to answer)
 
@@ -257,6 +259,8 @@ class Arena:
         self.verbose = verbose
         self.keyboard: Keyboard | None = None  # started by repl()
         self.skip = False  # /next typed while a model worked: move on to the next challenger
+        self.ending = False  # /end: finish with the session's table
+        self.knockout_places: dict[str, int] = {}  # model -> place in the last /contest
         self.router = OpenRouter(load_api_key(), max_tokens, temperature)
         self.arena_dir = self.cfg.arena_dir
         self.arena_dir.mkdir(parents=True, exist_ok=True)
@@ -374,6 +378,8 @@ class Arena:
         for line in self.keyboard.drain() if self.keyboard else []:
             if line in ("/stop", "/quit", "/exit"):
                 stop = True
+            elif line == "/end":
+                stop, self.ending = True, True
             elif line == "/next":
                 stop, self.skip = True, True
             elif line.startswith("/"):
@@ -667,6 +673,7 @@ class Arena:
             "/<its name or its Zook's name> <message>, type to both, or press Enter to go on.", "dim")
         rounds, places = await asyncio.to_thread(tournament.knockout, seats, play, say, before=before, after=after)
         champ = places[0][1]
+        self.knockout_places = {s.model: p for p, s in places}
         say("\n  Final ranking", "b")
         for place, s in places:
             say(f"  {place:>2}. {s.billing()}")
@@ -748,7 +755,7 @@ class Arena:
 
     async def offer_contest(self) -> None:
         """When the queue has run out, ask whether to play the knockout now."""
-        if self.queue or not self.keyboard:
+        if self.queue or not self.keyboard or self.ending:
             return
         qualified = [e for e in self.entrants.values() if e.qualified and e.design]
         if len(qualified) < 2:
@@ -785,8 +792,9 @@ class Arena:
                 await self._safely(self.start(self.queue.pop(0)))
             self.leaderboard()
             await self._disconnect()
+            self.summary()
             return
-        while True:
+        while not self.ending:
             say("\nyou> ", end="")
             try:
                 line = await asyncio.to_thread(self.keyboard.get)
@@ -812,6 +820,8 @@ class Arena:
                     say("usage: /challenger <openrouter model id>, e.g. /challenger openai/gpt-5", "y")
                     continue
                 await self.call(arg.strip())
+            elif cmd == "/end":
+                self.ending = True
             elif cmd == "/list":
                 say("queue: " + (", ".join(self.queue) or "(empty)"))
             elif cmd == "/leaderboard":
@@ -835,7 +845,49 @@ class Arena:
                     await self.call(self.queue.pop(0))
                 self.skip = False
         await self._disconnect()
+        if self.ending:
+            self.summary()
+            if self.keyboard:
+                self.keyboard.drain()
+                say("\nPress Enter to quit. ", "b", end="")
+                await asyncio.to_thread(self.keyboard.get)
         say("bye", "dim")
+
+    def summary(self) -> Path | None:
+        """The session in one table: every model called, its Zook, result, runs, knockout place,
+        tokens and cost, with totals. Printed and saved to <arena>/Sessions/<date_time>.txt."""
+        if not self.entrants:
+            say("\nNo models were called this session.", "dim")
+            return None
+        rows = []
+        for e in self.entrants.values():
+            s = e.submission or {}
+            outcome = str(s.get("outcome", "")).upper()
+            if outcome == "DRAW" and s.get("status") == "timeout":
+                outcome += " (time limit)"
+            runs = ChallengeState(self.challenge, self.cfg.zoo_dir / entrant_folder(e.model)).runs_used
+            rows.append([e.model, (e.design or "-").split("/", 1)[-1], outcome or "not submitted",
+                         f"{s['score']:g}" if "score" in s else "-", "yes" if e.qualified else "no",
+                         f"{runs} of {self.challenge.runs or 'unlimited'}",
+                         _place(self.knockout_places, e.model), f"{e.tokens:,}", f"${e.cost:.4f}"])
+        total = ["TOTAL", "", "", "", f"{sum(e.qualified for e in self.entrants.values())} qualified", "", "",
+                 f"{sum(e.tokens for e in self.entrants.values()):,}",
+                 f"${sum(e.cost for e in self.entrants.values()):.4f}"]
+        lines = _table(["Model", "Zook", "Challenge game", "Score", "Qualified", "Test runs", "Knockout",
+                        "Tokens", "Cost"], rows, total)
+        title = f"BAMZOOKi Arena - {self.challenge.title} - session ending {time.strftime('%Y-%m-%d %H:%M')}"
+        say(f"\n{title}\n", "b")
+        for line in lines:
+            say(line)
+        path = self.arena_dir / "Sessions" / f"{time.strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(title + "\n\n" + "\n".join(lines) + "\n", encoding="utf-8")
+            say(f"\n(saved to {path})", "dim")
+        except OSError as err:
+            say(f"\n(couldn't save the table: {err})", "y")
+            return None
+        return path
 
     async def call(self, model: str) -> None:
         """Run a challenger. /next typed while it works (or a model that breaks down) moves straight
@@ -843,7 +895,7 @@ class Arena:
         while True:
             self.skip = False
             await self._safely(self.start(model))
-            if not self.skip:
+            if not self.skip or self.ending:
                 break
             self.skip = False
             if not self.queue:
@@ -909,6 +961,32 @@ def _one_line(text: str, limit: int = REMARK_CHARS) -> str:
     if len(line) > limit:
         line = line[:limit].rsplit(" ", 1)[0].rstrip(",;:-") + "..."
     return line
+
+
+def _table(headers: list[str], rows: list[list[str]], total: list[str] | None = None) -> list[str]:
+    """A plain-text table (it reads the same in the terminal and in a .txt): numbers right-aligned."""
+    body = rows + ([total] if total else [])
+    widths = [max(len(str(r[i])) for r in [headers] + body) for i in range(len(headers))]
+    numeric = [all(re.fullmatch(r"[$\d,.\- ]*", str(r[i])) for r in body) for i in range(len(headers))]
+
+    def line(r):
+        return "| " + " | ".join(str(c).rjust(w) if num else str(c).ljust(w)
+                                 for c, w, num in zip(r, widths, numeric)) + " |"
+    rule = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
+    out = [rule, line(headers), rule, *(line(r) for r in rows)]
+    if total:
+        out += [rule, line(total)]
+    return out + [rule]
+
+
+def _place(places: dict[str, int], model: str) -> str:
+    """'1st', '=3rd' (shared), or '-' when it wasn't in the knockout."""
+    if model not in places:
+        return "-"
+    p = places[model]
+    suffix = "th" if 10 <= p % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(p % 10, "th")
+    shared = list(places.values()).count(p) > 1
+    return f"{'=' if shared else ''}{p}{suffix}"
 
 
 def _keep_video(video: Path, folder: Path, label: str) -> None:
