@@ -188,7 +188,7 @@ evaluation game** that `submit_design` plays (contest, opponent, seed, side; out
 win 1, draw 0.5, loss 0). The evaluation seed is **secret** by default (`reveal_seed = false`):
 games are deterministic, so a model that knows the seed can simply rehearse the evaluation game.
 `challenges/short.toml` is the same task with 3 runs. Every contest in a challenge stops after
-`time_limit` seconds of play (default 120, in `[scoring]`); no winner by then is a draw. **Every test run is a single game that the model chooses** through the
+`time_limit` seconds of play after Go, in real time (default 120, in `[scoring]`); no winner by then is a draw and the game is stopped. **Every test run is a single game that the model chooses** through the
 tool arguments: a trial for one of its Zooks, or one contest with the two Zooks and the seed it
 picks. Which games to spend runs on is its testing strategy. Every run result reminds the model
 how many runs are left. In its tests a model can only use the example Zooks
@@ -220,7 +220,7 @@ the repo:
 Zook Entries/<model>/<Name>/<n>.0.zook (+ .json, previews)   designs (spec, stats, notes)
 Zook Entries/<model>/challenge-<name>.json, results.jsonl     budget, submissions, results
 Renders/<model>/...mp4 (+ _stills.png, .json)                 videos and contact sheets
-Transcripts/<model>/<timestamp>.md                            arena conversations
+Transcripts/<model>/<timestamp>.md (+ .mcp.log)              arena conversations (+ the MCP server's own log)
 ```
 
 The same features are available in Python via `bamzooki.studio.Studio`.
@@ -260,8 +260,10 @@ streamed, so it appears word by word as the model writes it. Streaming costs the
 
 **Talking to a model while it works.** You can type at any time. The model gets your message
 after its current step (the tool call or game it's in), takes it into account and carries on.
-`/stop` halts it after that step, and you can then talk to it or move on with `/next`. Other
-commands wait until the model is done.
+`/stop` halts it after that step, and you can then talk to it or move on with `/next`. `/next`
+typed while it works halts it and calls the next challenger straight away, which is the way out
+of a model that is stuck or not playing. Other commands wait until the model is done. If a model
+breaks down (an error in its run), the arena reports it and stays at the prompt.
 
 **Qualifying and `/contest`.** A model qualifies by **winning** its challenge game. When the
 last challenger in the queue has finished and at least two models have qualified, the arena asks
@@ -289,8 +291,12 @@ max_tokens = 4000    # per reply
 
 **While a game is playing, leave the engine window in front** and don't close it. The game only
 runs while its window has focus, and the runner takes focus back only once you've been idle for
-3 s. A run that is starved or closed is reported as `stalled` or `engine_error`. It doesn't
-count against the budget, and a failed `submit_design` can simply be retried.
+3 s. The time limit is real time: a game that has no winner `time_limit` seconds after Go is
+stopped and counts as a draw. The game runs slower than real time while it records video, so the
+limit is measured on both the game's clock and the real one, whichever runs out first. If the
+engine doesn't stop itself, the runner stops it 20 s later, still as a draw. A run that never gets
+to Go (starved of focus, or closed) is reported as `stalled` or `engine_error`. It doesn't count
+against the budget, and a failed `submit_design` can simply be retried.
 
 Each challenger's whole conversation is saved to `Transcripts/<model>/`, and the tokens and
 cost (from OpenRouter) are printed after each reply. Models without tool calling are skipped.

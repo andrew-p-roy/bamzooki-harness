@@ -4,7 +4,9 @@
 -- Lua 4.0 dialect: no `local function`, globals instead of upvalues, conditions must not be nil,
 -- do not define Finalize (it breaks runtime classes), world agents only visible inside OpenAccess.
 --
--- Job fields: contest_file, green, red, out, log, go_time, max_sim_time, stop_on_finish,
+-- Job fields: contest_file, green, red, out, log, go_time, max_sim_time, max_real_after_go
+-- (the time limit also in real seconds after Go: the sim runs slower than real time while capturing
+-- video, and the game must still end on time), stop_on_finish,
 -- finish_hold, update_interval, track_interval, overrides = { BehaviourName = { param = value } },
 -- record (0/1), record_bmv, record_bvz,
 -- camera: 1 = the game's SplitScreen (5 views) + lights, 2 = 2x2-pixel camera (no picture),
@@ -29,6 +31,7 @@ function MessageHarnessStart(job)
 	myDone = false
 	myGoing = false
 	myGoTime = -1
+	myGoReal = -1
 	myFinishTime = -1
 	myRecording = false
 	HLog("start " .. job.contest_file)
@@ -219,6 +222,7 @@ function TimerUpdate()
 		World.CloseAccess()
 		myGoing = 1
 		myGoTime = t
+		myGoReal = System.RealTime()
 		HLog("go at sim " .. t)
 	end
 	if t >= myNextTrack then
@@ -228,6 +232,11 @@ function TimerUpdate()
 	end
 	if t > myJob.max_sim_time then
 		HarnessDone("timeout")
+	elseif myGoing ~= false and myJob.max_real_after_go > 0 then
+		if System.RealTime() - myGoReal > myJob.max_real_after_go then
+			HLog("time limit reached in real time at sim " .. t)
+			HarnessDone("timeout")
+		end
 	end
 end
 

@@ -187,6 +187,7 @@ class Engine:
             "seed": job.seed,
             "go_time": job.go_time,
             "max_sim_time": job.go_time + job.duration,
+            "max_real_after_go": job.duration,
             "stop_on_finish": 1 if job.stop_on_finish else 0,
             "finish_hold": job.finish_hold,
             "update_interval": 0.1,
@@ -219,13 +220,19 @@ class Engine:
                 "-script", _posix(LUA_DIR / "boot.lua"), "-job", _posix(run_dir / "job.dat")]
         if timeout is None:
             timeout = _wall_limit(job.go_time + job.duration)
-        status, error, wall = self._launch(args, timeout, focus, job.window, job.position)
+        # Once the game has started, it ends at the time limit in real time: the driver stops it
+        # itself, and if it can't (the engine paused or hung) we stop it a little later.
+        after_go = (run_dir / "driver_log.txt", job.duration + job.finish_hold + GO_GRACE)
+        status, error, wall = self._launch(args, timeout, focus, job.window, job.position, after_go)
         raw: dict = {}
         if out.exists():
             raw = table.loads(out.read_text("latin-1"))
             status = raw.get("status", status)
         elif status == "exited":
             status = "no_result"
+        elif status == "time_limit":
+            status, error = "timeout", (f"Stopped by the harness at the {job.duration:.0f} s time limit (the game "
+                                        "didn't end itself): no winner, a draw.")
         elif status == "timeout":
             status, error = "stalled", _stalled(timeout, error)
         verdict = judge(raw, job.contest.players) if raw else None
@@ -424,8 +431,10 @@ class Engine:
         return proc
 
     def _launch(self, args: list[str], timeout: float, focus: str,
-                size: tuple[int, int] | None = None,
-                position: str = "none") -> tuple[str, str | None, float]:
+                size: tuple[int, int] | None = None, position: str = "none",
+                after_go: tuple[Path, float] | None = None) -> tuple[str, str | None, float]:
+        """Run the engine until it exits. Killed after `timeout` real seconds ("timeout"), or,
+        with after_go = (driver log, seconds), that long after the log reports Go ("time_limit")."""
         log = Path(os.environ.get("APPDATA", "")) / "BonsaiErrorLog.txt"
         log_mtime = log.stat().st_mtime if log.exists() else None
         cmd = self.install.config.wine_command + [str(self.root / ENGINE_EXE)] + args
@@ -465,12 +474,21 @@ class Engine:
 
         threading.Thread(target=watch, daemon=True).start()
         status = "exited"
-        try:
-            proc.wait(timeout)
-        except subprocess.TimeoutExpired:
+        go_at = None
+        while proc.poll() is None:
+            now = time.time()
+            if after_go and go_at is None and _logged_go(after_go[0]):
+                go_at = now
+            if go_at is not None and now - go_at > after_go[1]:
+                status = "time_limit"
+            elif now - t0 > timeout:
+                status = "timeout"
+            else:
+                time.sleep(0.25)
+                continue
             proc.kill()
             proc.wait()
-            status = "timeout"
+            break
         stop.set()
         error = None
         if log.exists() and log.stat().st_mtime != log_mtime:
@@ -479,6 +497,16 @@ class Engine:
             status = "engine_error"
             error = f"[{state['error_window']}]\n{error or ''}"
         return status, error, time.time() - t0
+
+
+GO_GRACE = 20.0  # real seconds past the time limit before we stop a game the driver didn't end
+
+
+def _logged_go(log: Path) -> bool:
+    try:
+        return "go at sim" in log.read_text("latin-1")
+    except OSError:
+        return False
 
 
 def _wall_limit(sim_seconds: float) -> float:

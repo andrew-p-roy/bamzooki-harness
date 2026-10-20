@@ -191,6 +191,52 @@ def test_stalled_runs_are_not_game_timeouts():
     assert "does not count" in _stalled(492, None) and _stalled(492, "x").endswith("\nx")
 
 
+class _Hung:
+    """A stand-in engine process that never exits by itself."""
+
+    pid = 0
+
+    def __init__(self, *a, **k):
+        self.killed = False
+
+    def poll(self):
+        return 0 if self.killed else None
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def _hung_engine(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import bamzooki.runner as runner
+
+    monkeypatch.setattr(runner.subprocess, "Popen", _Hung)
+    monkeypatch.setattr(runner._win, "windows_of", lambda pid: [])
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    eng = runner.Engine.__new__(runner.Engine)
+    eng.install = SimpleNamespace(config=SimpleNamespace(wine_command=[]))
+    eng.root = tmp_path
+    return eng
+
+
+def test_a_started_game_is_stopped_at_the_time_limit(tmp_path, monkeypatch):
+    eng = _hung_engine(tmp_path, monkeypatch)
+    log = tmp_path / "driver_log.txt"
+    log.write_text("   6.2 go at sim 4.0\n")
+    status, _, wall = eng._launch([], timeout=30, focus="launch", after_go=(log, 0.5))
+    assert status == "time_limit" and wall < 5  # a draw at the time limit, long before the wall limit
+
+
+def test_a_game_that_never_starts_is_stalled(tmp_path, monkeypatch):
+    eng = _hung_engine(tmp_path, monkeypatch)
+    status, _, _ = eng._launch([], timeout=0.5, focus="launch", after_go=(tmp_path / "none.txt", 0.1))
+    assert status == "timeout"  # Engine.run turns this into "stalled": not played, not scored
+
+
 def test_arena_sees_a_submission():
     import json
 

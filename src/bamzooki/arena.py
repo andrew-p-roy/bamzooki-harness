@@ -19,7 +19,8 @@ prompt to talk to it. Commands:
     anything else         a message to the current model (it may use its tools to answer)
 
 While a model is working you can still type: a message is handed to it after its current step
-(the tool call or game it's in), it takes it into account and carries on; /stop halts it there.
+(the tool call or game it's in), it takes it into account and carries on; /stop halts it there,
+/next halts it and calls the next challenger (for a model that's stuck or not playing).
 --verbose streams its reasoning and notes as it writes them and shows them, and its tool
 arguments, in full (normally each reply is shown when complete, cut to 100 words).
 
@@ -96,7 +97,8 @@ class OpenRouter:
             self._models = {m["id"]: m for m in r.json().get("data", [])}
         return self._models.get(model, {})
 
-    async def chat(self, model: str, messages: list[dict], tools: list[dict], on_delta=None) -> dict:
+    async def chat(self, model: str, messages: list[dict], tools: list[dict], on_delta=None,
+                   single_tool: bool = False) -> dict:
         """One completion. With on_delta(kind, text) it is streamed: each piece of "reasoning" or
         "content" goes to on_delta as it arrives, and the reply is put back together into the
         same shape a non-streamed request returns."""
@@ -104,6 +106,8 @@ class OpenRouter:
                 "max_tokens": self.max_tokens, "usage": {"include": True}}
         if self.temperature is not None:
             body["temperature"] = self.temperature
+        if single_tool:
+            body["parallel_tool_calls"] = False
         if on_delta:
             return await self._stream({**body, "stream": True}, on_delta)
         for attempt in range(5):
@@ -185,6 +189,11 @@ class Keyboard:
                 say("    (queued: the model gets it after its current step; /stop halts it)", "dim")
             self.lines.put(line)
 
+    def halting(self) -> bool:
+        """/stop or /next has been typed and not handled yet (looked at, not taken)."""
+        with self.lines.mutex:
+            return any(line and line.strip() in ("/stop", "/next") for line in self.lines.queue)
+
     def get(self) -> str | None:
         """The next line (blocking); None at end of input."""
         return self.lines.get()
@@ -218,6 +227,7 @@ class Entrant:
     transcript: Path | None = None
     design: str | None = None  # the submitted design ("folder/Name@n")
     qualified: bool = False  # its challenge game was a win
+    single_tool: bool = False  # its provider takes one tool call per reply (found out on the way)
 
 
 class Arena:
@@ -230,6 +240,7 @@ class Arena:
         self.auto = auto
         self.verbose = verbose
         self.keyboard: Keyboard | None = None  # started by repl()
+        self.skip = False  # /next typed while a model worked: move on to the next challenger
         self.router = OpenRouter(load_api_key(), max_tokens, temperature)
         self.arena_dir = self.cfg.arena_dir
         self.arena_dir.mkdir(parents=True, exist_ok=True)
@@ -255,7 +266,12 @@ class Arena:
             command=sys.executable,
             args=["-m", "bamzooki.mcp_server", "--model", model, "--challenge", str(self.challenge.path)],
             cwd=str(self.arena_dir), env=env)
-        r, w = await self._stack.enter_async_context(stdio_client(params))
+        # The server's own output (tracebacks from tools a model called wrongly) goes beside the
+        # transcript, not over the audience's screen; the model still gets the error as the result.
+        t = self.entrant.transcript if self.entrant else None
+        errlog = self._stack.enter_context(
+            t.with_suffix(".mcp.log").open("a", encoding="utf-8") if t else open(os.devnull, "w"))
+        r, w = await self._stack.enter_async_context(stdio_client(params, errlog=errlog))
         self.session = await self._stack.enter_async_context(ClientSession(r, w))
         await self.session.initialize()
         listed = await self.session.list_tools()
@@ -328,8 +344,10 @@ class Arena:
         for line in self.keyboard.drain() if self.keyboard else []:
             if line in ("/stop", "/quit", "/exit"):
                 stop = True
+            elif line == "/next":
+                stop, self.skip = True, True
             elif line.startswith("/"):
-                say(f"    ({line.split()[0]} waits until the model is done: type it again then, or /stop)", "y")
+                say(f"    ({line.split()[0]} waits until the model is done: type it again then, or /stop / /next)", "y")
             else:
                 e.messages.append({"role": "user", "content": INTERJECTION.format(line)})
                 self._log("audience (while working)", line)
@@ -341,18 +359,22 @@ class Arena:
         for _ in range(self.max_turns):
             _, stop = self._interjections(e)
             if stop:
-                say(f"[stopped: type to talk to {e.model}, or /next]", "y")
+                say(f"[stopped {e.model}]" if self.skip else f"[stopped: type to talk to {e.model}, or /next]", "y")
                 return
             _prune_images(e.messages, keep=2)
             shown: list[str] = []  # kinds already streamed to the screen
             try:
-                if self.verbose:  # stream: reasoning and text appear as the model writes them
-                    data = await self.router.chat(e.model, e.messages, self.tools, on_delta=self._printer(e, shown))
-                    if shown:
-                        say("")
-                else:
-                    data = await self.router.chat(e.model, e.messages, self.tools)
+                # verbose: stream, so reasoning and text appear as the model writes them
+                data = await self.router.chat(e.model, e.messages, self.tools, single_tool=e.single_tool,
+                                              on_delta=self._printer(e, shown) if self.verbose else None)
+                if shown:
+                    say("")
             except (RuntimeError, httpx.HTTPError) as err:
+                if not e.single_tool and "single tool" in str(err).lower():
+                    e.single_tool = True  # this provider takes one call per reply: redo the history that way
+                    _one_call_per_turn(e.messages)
+                    say("    [this model's provider takes one tool call at a time; carrying on that way]", "y")
+                    continue
                 say(f"\n[api error] {err}", "r")
                 return
             usage = data.get("usage") or {}
@@ -362,6 +384,9 @@ class Arena:
             text = (msg.get("content") or "").strip()
             thought = (msg.get("reasoning") or "").strip()
             calls = msg.get("tool_calls") or []
+            if e.single_tool and len(calls) > 1:
+                say(f"    [{len(calls)} tool calls at once: running the first; this model gets one per turn]", "y")
+                calls = calls[:1]
             e.messages.append({k: v for k, v in {"role": "assistant", "content": msg.get("content") or "",
                                                  "tool_calls": calls or None}.items() if v is not None})
             if thought:
@@ -386,6 +411,10 @@ class Arena:
                 return
             images = []
             for call in calls:
+                if self.keyboard and self.keyboard.halting():  # don't sit through the rest of a batch
+                    e.messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
+                                       "content": "(not run: the audience stopped you)"})
+                    continue
                 images += await self._run_tool(call)
             if images and e.vision:
                 e.messages.append({"role": "user", "content": [
@@ -396,10 +425,7 @@ class Arena:
         e = self.entrant
         fn = call.get("function") or {}
         name = fn.get("name", "")
-        try:
-            args = json.loads(fn.get("arguments") or "{}")
-        except json.JSONDecodeError as err:
-            args, bad = None, f"Invalid JSON arguments: {err}"
+        args, bad = _tool_args(fn.get("arguments"))
         say(f"  -> {name}({json.dumps(args) if self.verbose and args is not None else _short(args)})", "dim")
         images: list[dict] = []
         if args is None:
@@ -609,7 +635,7 @@ class Arena:
         self.keyboard = Keyboard()
         if self.auto:
             while self.queue:
-                await self.start(self.queue.pop(0))
+                await self._safely(self.start(self.queue.pop(0)))
             self.leaderboard()
             await self._disconnect()
             return
@@ -633,14 +659,12 @@ class Arena:
                 if not self.queue:
                     say("The queue is empty: use /challenger <openrouter model id>.", "y")
                     continue
-                await self.start(self.queue.pop(0))
-                await self.offer_contest()
+                await self.call(self.queue.pop(0))
             elif cmd == "/challenger":
                 if not arg:
                     say("usage: /challenger <openrouter model id>, e.g. /challenger openai/gpt-5", "y")
                     continue
-                await self.start(arg.strip())
-                await self.offer_contest()
+                await self.call(arg.strip())
             elif cmd == "/list":
                 say("queue: " + (", ".join(self.queue) or "(empty)"))
             elif cmd == "/leaderboard":
@@ -659,9 +683,41 @@ class Arena:
                     continue
                 self.entrant.messages.append({"role": "user", "content": line})
                 self._log("audience", line)
-                await self.converse()
+                await self._safely(self.converse())
+                if self.skip and self.queue:  # /next typed while it answered
+                    await self.call(self.queue.pop(0))
+                self.skip = False
         await self._disconnect()
         say("bye", "dim")
+
+    async def call(self, model: str) -> None:
+        """Run a challenger. /next typed while it works (or a model that breaks down) moves straight
+        on to the next one in the queue; when the queue runs out, offer the contest."""
+        while True:
+            self.skip = False
+            await self._safely(self.start(model))
+            if not self.skip:
+                break
+            self.skip = False
+            if not self.queue:
+                say("The queue is empty: /challenger <model> calls another, /contest runs the knockout.", "y")
+                break
+            model = self.queue.pop(0)
+            say(f"[moving on to {model}]", "y")
+        await self.offer_contest()
+
+    async def _safely(self, work) -> None:
+        """One model's failure (a crash in the loop, its MCP server dying) mustn't end the session."""
+        try:
+            await work
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as err:  # noqa: BLE001 (report it and keep the arena running)
+            name = self.entrant.model if self.entrant else "the model"
+            say(f"\n[{name} broke down: {type(err).__name__}: {err}] /next moves on, or talk to it to retry.", "r")
+            self._log("runner error", f"{type(err).__name__}: {err}")
+            if self.keyboard:
+                self.keyboard.busy = False
 
 
 def _prune_images(messages: list[dict], keep: int = 2) -> None:
@@ -673,6 +729,46 @@ def _prune_images(messages: list[dict], keep: int = 2) -> None:
                 seen += 1
                 if seen > keep:
                     m["content"] = [{"type": "text", "text": "[earlier images omitted to save space]"}]
+
+
+def _one_call_per_turn(messages: list[dict]) -> None:
+    """Rewrite, in place, every reply that made several tool calls as consecutive replies of one
+    call each, each followed by its own result, for providers that refuse parallel calls."""
+    out, i = [], 0
+    while i < len(messages):
+        m = messages[i]
+        calls = m.get("tool_calls") or []
+        if m.get("role") != "assistant" or len(calls) < 2:
+            out.append(m)
+            i += 1
+            continue
+        results = {}
+        j = i + 1
+        while j < len(messages) and messages[j].get("role") == "tool":
+            results[messages[j].get("tool_call_id")] = messages[j]
+            j += 1
+        for n, call in enumerate(calls):
+            out.append({"role": "assistant", "content": m.get("content", "") if n == 0 else "", "tool_calls": [call]})
+            out.append(results.get(call.get("id")) or {"role": "tool", "tool_call_id": call.get("id", ""),
+                                                        "content": "(no result)"})
+        i = j
+    messages[:] = out
+
+
+def _tool_args(raw) -> tuple[dict | None, str]:
+    """A tool call's arguments as a dict, or (None, the error to send back). Some models send
+    "null" or nothing for a call without arguments."""
+    if isinstance(raw, dict):
+        return raw, ""
+    try:
+        args = json.loads(raw or "{}")
+    except (json.JSONDecodeError, TypeError) as err:
+        return None, f"ERROR: the arguments aren't valid JSON ({err}). Send a JSON object, e.g. {{\"ref\": \"Ant\"}}."
+    if args is None:
+        return {}, ""
+    if not isinstance(args, dict):
+        return None, f"ERROR: the arguments must be a JSON object of named parameters, not {type(args).__name__}."
+    return args, ""
 
 
 def _game_stats(r, green: str, red: str) -> str:

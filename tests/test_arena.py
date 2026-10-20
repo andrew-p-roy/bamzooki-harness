@@ -21,7 +21,7 @@ class Router:
     def __init__(self, calls=1, on_call=None):
         self.calls, self.on_call, self.seen = calls, on_call, []
 
-    async def chat(self, model, messages, tools):
+    async def chat(self, model, messages, tools, on_delta=None, single_tool=False):
         self.seen.append([dict(m) for m in messages])
         if self.calls:
             self.calls -= 1
@@ -33,7 +33,7 @@ class Router:
 
 def arena(router, kb, verbose=False):
     a = Arena.__new__(Arena)
-    a.router, a.keyboard, a.verbose, a.max_turns, a.tools = router, kb, verbose, 10, []
+    a.router, a.keyboard, a.verbose, a.max_turns, a.tools, a.skip = router, kb, verbose, 10, [], False
     a.entrant = Entrant("lab/model", messages=[{"role": "user", "content": "go"}], submitted=True)
 
     async def run_tool(call):
@@ -125,7 +125,7 @@ def test_stream_error_mid_way():
 
 def test_verbose_streams_and_doesnt_print_twice(capsys):
     class Streamer(Router):
-        async def chat(self, model, messages, tools, on_delta=None):
+        async def chat(self, model, messages, tools, on_delta=None, single_tool=False):
             assert on_delta is not None
             for piece in ("hel", "lo"):
                 on_delta("content", piece)
@@ -173,6 +173,113 @@ def test_no_offer_without_two_qualified_or_with_models_waiting():
     assert played == [] and kb.get() == "typed earlier"  # not asked: typing left alone
     played, kb = offer("y", queue_left=["next/model"])
     assert played == [] and kb.get() == "typed earlier"
+
+
+def test_tool_args_null_and_bad():
+    from bamzooki.arena import _tool_args
+
+    assert _tool_args("null") == ({}, "") and _tool_args(None) == ({}, "") and _tool_args("") == ({}, "")
+    assert _tool_args('{"ref": "Ant"}') == ({"ref": "Ant"}, "") and _tool_args({"a": 1}) == ({"a": 1}, "")
+    assert _tool_args("[1]")[0] is None and "JSON object" in _tool_args("[1]")[1]
+    assert _tool_args("{oops")[0] is None and "valid JSON" in _tool_args("{oops")[1]
+
+
+def test_next_while_working_moves_on_to_the_next_challenger():
+    a = arena(Router(), keyboard())
+    a.queue, a.entrants, started = ["second/model", "third/model"], {}, []
+
+    async def start(model):
+        started.append(model)
+        a.entrant = Entrant(model, messages=[])
+        if model == "first/model":
+            a.keyboard.lines.put("/next")  # typed while it was (not) playing
+            await a.converse()
+
+    a.start = start
+    asyncio.run(a.call("first/model"))
+    assert started == ["first/model", "second/model"] and a.queue == ["third/model"] and not a.skip
+
+
+def test_a_model_that_crashes_doesnt_end_the_session():
+    a = arena(Router(), keyboard())
+    a.queue, a.entrants = [], {}
+
+    async def start(model):
+        raise UnboundLocalError("boom")
+
+    a.start = start
+    asyncio.run(a.call("broken/model"))  # reported, not raised
+    assert a.keyboard.busy is False
+
+
+def test_parallel_calls_rewritten_one_per_turn():
+    from bamzooki.arena import _one_call_per_turn
+
+    call = lambda i: {"id": f"c{i}", "function": {"name": "list_zooks", "arguments": "null"}}  # noqa: E731
+    msgs = [{"role": "user", "content": "go"},
+            {"role": "assistant", "content": "looking", "tool_calls": [call(1), call(2)]},
+            {"role": "tool", "tool_call_id": "c1", "content": "r1"},
+            {"role": "tool", "tool_call_id": "c2", "content": "r2"},
+            {"role": "user", "content": "images"}]
+    _one_call_per_turn(msgs)
+    assert [m["role"] for m in msgs] == ["user", "assistant", "tool", "assistant", "tool", "user"]
+    assert [m["content"] for m in msgs[2::2][:2]] == ["r1", "r2"] and msgs[1]["content"] == "looking"
+    assert all(len(m["tool_calls"]) == 1 for m in msgs if m["role"] == "assistant")
+
+
+def test_single_tool_provider_error_is_handled():
+    class Picky(Router):
+        """Refuses history with parallel calls; returns several calls when allowed to."""
+
+        async def chat(self, model, messages, tools, on_delta=None, single_tool=False):
+            self.seen.append(single_tool)
+            if any(len(m.get("tool_calls") or []) > 1 for m in messages):
+                raise RuntimeError('OpenRouter 200: {"message": "This model only supports single tool-calls at once!"}')
+            if len(self.seen) in (1, 3):  # 2 = the refused request, 4 = done
+                calls = [{"id": f"c{len(self.seen)}{i}", "function": {"name": "list_zooks", "arguments": "null"}}
+                         for i in range(3)]
+                return {"choices": [{"message": {"content": "", "tool_calls": calls}}], "usage": {}}
+            return {"choices": [{"message": {"content": "done"}}], "usage": {}}
+
+    r = Picky()
+    a = arena(r, keyboard())
+    ran = []
+
+    async def run_tool(call):
+        ran.append(call["id"])
+        a.entrant.messages.append({"role": "tool", "tool_call_id": call["id"], "content": "{}"})
+        return []
+
+    a._run_tool = run_tool
+    asyncio.run(a.converse())
+    assert a.entrant.single_tool and r.seen == [False, False, True, True]
+    assert ran == ["c10", "c11", "c12", "c30"]  # after the switch only the first of several calls runs
+    assert a.entrant.messages[-1]["content"] == "done"
+
+
+def test_stop_skips_the_rest_of_a_batch_of_calls():
+    class Batch(Router):
+        async def chat(self, model, messages, tools, on_delta=None, single_tool=False):
+            self.seen.append(1)
+            calls = [{"id": f"c{i}", "function": {"name": "list_zooks", "arguments": "{}"}} for i in range(4)]
+            return {"choices": [{"message": {"content": "", "tool_calls": calls}}], "usage": {}}
+
+    r, kb = Batch(), keyboard()
+    a = arena(r, kb)
+    ran = []
+
+    async def run_tool(call):
+        ran.append(call["id"])
+        a.entrant.messages.append({"role": "tool", "tool_call_id": call["id"], "content": "{}"})
+        kb.lines.put("/next")  # typed during the first call
+        return []
+
+    a._run_tool = run_tool
+    asyncio.run(a.converse())
+    assert ran == ["c0"] and len(r.seen) == 1 and a.skip
+    tools = [m for m in a.entrant.messages if m["role"] == "tool"]
+    assert [t["tool_call_id"] for t in tools] == ["c0", "c1", "c2", "c3"]  # every call still answered
+    assert "not run" in tools[-1]["content"]
 
 
 def test_verbose_shows_everything():
