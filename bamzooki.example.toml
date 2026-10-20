@@ -36,3 +36,8 @@
 # max_turns = 120          # model turns per challenger before the runner stops it
 # max_tokens = 4000        # per model reply
 # temperature = 0.7
+# showtime = true                           # the show (extra model calls); the four below need it
+# announcer = "anthropic/claude-haiku-5.5"   # the show's host ("none" for no announcer)
+# announcer_style = "ringside"              # ringside, documentary, football, noir, or your own words
+# speak = true                              # read the announcer aloud
+# voice = "Microsoft Hazel Desktop"         # Windows voice (macOS: a `say -v` name)

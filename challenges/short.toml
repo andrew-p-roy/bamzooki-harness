@@ -4,6 +4,7 @@
 
 name = "short"
 title = "Beat Spider at Sumo (short test)"
+music = "synth_funk"                     # the highlights reel's track (Music/tracks.toml; "none" = silent)
 description = """
 Design a Zook that beats Spider, the game's best example Zook, at Zook Sumo: push it off the
 raised round table (or survive while it falls off) without leaving the table yourself.

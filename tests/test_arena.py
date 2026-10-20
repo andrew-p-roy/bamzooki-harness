@@ -34,7 +34,7 @@ class Router:
 def arena(router, kb, verbose=False):
     a = Arena.__new__(Arena)
     a.router, a.keyboard, a.verbose, a.max_turns, a.tools, a.skip = router, kb, verbose, 10, [], False
-    a.ending, a.knockout_places = False, {}
+    a.ending, a.knockout_places, a.announcer, a.show = False, {}, None, False
     a.entrant = Entrant("lab/model", messages=[{"role": "user", "content": "go"}], submitted=True)
 
     async def run_tool(call):
@@ -312,11 +312,12 @@ class Talker(Router):
         return {"choices": [{"message": {"content": f"{model} line one\nline two"}}], "usage": {}}
 
 
-def contest_arena(*typed):
+def contest_arena(*typed, show=True):
     from bamzooki.tournament import Seat
 
     r = Talker()
     a = arena(r, keyboard(*typed))
+    a.show = show
     seats = [Seat("lab/alpha", "lab_alpha/Crusher@1"), Seat("lab/beta", "lab_beta/Stomper@2")]
     a.entrants = {s.model: Entrant(s.model, messages=[]) for s in seats}
     return a, r, seats
@@ -424,3 +425,221 @@ def test_verbose_shows_everything():
     long = " ".join(["w"] * 150)
     assert arena(Router(), keyboard(), verbose=True)._clip(long) == long
     assert arena(Router(), keyboard())._clip(long).endswith("[+50 words]")
+
+
+def bout_of(seats, stats="finished, 9 s simulated | decided by fall"):
+    from bamzooki.tournament import Bout, Game
+
+    a, b = seats
+    return Bout(a, b, games=[Game(a, b, 5, "finished", a, stats)], winner=a, how="won")
+
+
+def fake_stills(monkeypatch, made):
+    from bamzooki import showtime
+
+    def stills(video, finish, out):
+        out.write_bytes(b"\x89PNG")
+        made.append((video, finish, out))
+        return out
+    monkeypatch.setattr(showtime, "end_of_game_stills", stills)
+
+
+def test_post_match_interviews_see_the_end_and_the_stills_are_deleted(tmp_path, monkeypatch):
+    from bamzooki.announcer import Announcer
+
+    made = []
+    fake_stills(monkeypatch, made)
+    a, r, seats = contest_arena()
+    a.show_log = tmp_path / "show.md"
+    a.entrants["lab/beta"].vision = False
+    a.announcer = Announcer(Talker(), "host/model")
+    bout = bout_of(seats)
+    asyncio.run(a.post_match("Zook Sumo", "Final", bout, "alpha beat beta", (tmp_path / "g.mp4", 4.2), tmp_path))
+    assert made and made[0][:2] == (tmp_path / "g.mp4", 4.2)
+    assert not made[0][2].exists()  # temporary: gone after the interviews
+    host = a.announcer.router.seen
+    assert [m for m, *_ in host] == ["host/model"] * 3  # the call, then a question for each
+    assert [m for m, *_ in r.seen] == ["lab/alpha", "lab/beta"]  # winner first
+    winner_msg = a.entrants["lab/alpha"].messages[0]["content"]
+    assert isinstance(winner_msg, list) and winner_msg[1]["type"] == "image_url"
+    assert "Stills of the deciding game" in winner_msg[0]["text"] and "host/model line one" in winner_msg[0]["text"]
+    loser_msg = a.entrants["lab/beta"].messages[0]["content"]
+    assert isinstance(loser_msg, str) and "decided by fall" in loser_msg  # can't see: told in words
+    assert "ANNOUNCER" in a.show_log.read_text(encoding="utf-8")
+
+
+def test_post_match_without_announcer_asks_stock_questions(tmp_path, monkeypatch, capsys):
+    fake_stills(monkeypatch, [])
+    a, r, seats = contest_arena()
+    a.show_log = tmp_path / "show.md"
+    asyncio.run(a.post_match("Zook Sumo", "Final", bout_of(seats), "alpha beat beta", None, tmp_path))
+    out = capsys.readouterr().out
+    assert "alpha, what won you that game?" in out and "beta, what happened out there?" in out
+    assert "attached" not in a.entrants["lab/alpha"].messages[0]["content"]  # no video, no stills
+
+
+def test_preview_match_shows_the_tape_and_the_announcer_sees_both(tmp_path, monkeypatch, capsys):
+    from bamzooki import showtime
+    from bamzooki.announcer import Announcer
+
+    a, r, seats = contest_arena()
+    a.show_log = tmp_path / "show.md"
+    a.announcer = Announcer(Talker(), "host/model")
+    pics = []
+    for n in ("a", "b"):
+        (tmp_path / f"{n}.png").write_bytes(b"png")
+    cards = [showtime.ZookCard(s.zook, s.zook_name, {"Weight": f"0.{i}5 kg"}, limbs=4 + i,
+                               previews={"three_quarter": str(tmp_path / f"{n}.png")})
+             for i, (s, n) in enumerate(zip(seats, "ab"))]
+
+    def versus(left, right, out):
+        pics.append((left, right))
+        out.write_bytes(b"png")
+        return out
+    monkeypatch.setattr(showtime, "versus_card", versus)
+    asyncio.run(a.preview_match("Zook Sumo", "Final", *seats, *cards, tmp_path))
+    out = capsys.readouterr().out
+    assert "Crusher" in out and "0.15 kg" in out and "Limbs" in out
+    assert pics == [(str(tmp_path / "a.png"), str(tmp_path / "b.png"))]
+    sent = a.announcer.router.seen[0][2]
+    assert "Green corner: lab/alpha" in sent[0]["text"] and sent[1]["type"] == "image_url"
+    assert not list(tmp_path.glob("versus-*"))  # the card is temporary too
+
+
+def test_sign_off_tells_the_story(tmp_path):
+    from bamzooki.announcer import Announcer
+
+    a, r, seats = contest_arena()
+    a.show_log = tmp_path / "show.md"
+    a.announcer = Announcer(Talker(), "host/model")
+    a.entrants["lab/alpha"].submission, a.entrants["lab/alpha"].design = {"outcome": "win"}, "lab_alpha/Crusher@1"
+    a.knockout_places = {"lab/alpha": 1, "lab/beta": 2}
+    story = a.story()
+    assert "lab/alpha: WIN in its challenge game with Crusher, 1st in the knockout." in story
+    assert "lab/beta: didn't submit, 2nd in the knockout." in story and "Champion: lab/alpha." in story
+    asyncio.run(a.sign_off())
+    assert "Champion: lab/alpha" in a.announcer.router.seen[0][2]
+
+
+def test_pick_before_a_match():
+    a, r, seats = contest_arena("/pick bogus", "/pick stomper", "go beta", None)
+    pick = {}
+    asyncio.run(a.match_talk(seats, "about to play", "to start the game", pick=pick))
+    assert pick["seat"] is seats[1] and [m for m, *_ in r.seen] == ["lab/alpha", "lab/beta"]  # picks aren't messages
+    a, r, seats = contest_arena("/pick alpha", None)
+    asyncio.run(a.match_talk(seats, "just played", "for the next match"))  # no picking after a match
+    assert r.seen == [] or all("/pick" not in c for *_, c in r.seen)
+
+
+def test_exhibition_picks_two_submitted_zooks():
+    a, r, seats = contest_arena()
+    a.entrants["lab/alpha"].design, a.entrants["lab/beta"].design = "lab_alpha/Crusher@1", "lab_beta/Stomper@2"
+    played = []
+
+    async def contest(seats=None, exhibition=False):
+        played.append(([s.zook_name for s in seats], exhibition))
+    a.contest = contest
+    asyncio.run(a.exhibition("stomper alpha"))
+    assert played == [(["Stomper", "Crusher"], True)]
+    for bad in ("alpha", "alpha alpha", "alpha nobody", ""):
+        asyncio.run(a.exhibition(bad))
+    assert len(played) == 1
+
+
+def test_round_title_for_a_single_match():
+    import random
+
+    from bamzooki.tournament import Seat, knockout
+
+    seen = []
+    rounds, places = knockout([Seat("l/a", "l_a/A@1"), Seat("l/b", "l_b/B@1")],
+                              lambda g, r, s: ("finished", "green", ""), lambda *_: None, random.Random(2),
+                              before=lambda a, b, name: seen.append(name), round_title="Exhibition match")
+    assert seen == ["Exhibition match"] and len(rounds) == 1
+
+
+def test_challenge_call_names_zooks_not_sides(tmp_path):
+    from types import SimpleNamespace
+
+    from bamzooki.announcer import Announcer
+
+    a = arena(Talker(), keyboard())
+    a.cfg, a.show_log = SimpleNamespace(zoo_dir=tmp_path), tmp_path / "show.md"
+    a.announcer = Announcer(Talker(), "host/model")
+    e = a.entrant
+    e.to_call = {"design": "lab_model/IronHalo@1", "outcome": "loss", "status": "finished",
+                 "game": {"contest": "Zook Sumo", "opponent": "Spider", "side": "green"},
+                 "fell": {"green": True, "red": False}, "finish_after_go_s": 5.08}
+    asyncio.run(a._call_challenge_game(e))
+    sent = a.announcer.router.seen[0][2]
+    assert "fell off: IronHalo" in sent and "fell off: green" not in sent
+    assert "won't be in it" in sent and e.to_call is None
+
+
+def test_hall_of_fame_only_on_yes():
+    for typed, want in (("y", True), ("YES", True), ("", False), ("n", False), (None, False)):
+        a = arena(Router(), Typist(typed))
+        assert asyncio.run(a.confirm("Add it? [y/N] ")) is want, typed
+    a = arena(Router(), None)
+    assert asyncio.run(a.confirm("Add it? [y/N] ")) is False  # no keyboard: never recorded
+
+
+def test_without_showtime_no_extra_model_calls(tmp_path, monkeypatch):
+    from bamzooki import showtime
+
+    made = []
+    fake_stills(monkeypatch, made)
+    a, r, seats = contest_arena(show=False)
+    a.show_log = tmp_path / "show.md"
+    cards = {s.model: showtime.ZookCard(s.zook, s.zook_name) for s in seats}
+    asyncio.run(a.trash_talk("Zook Sumo knockout", "Final", *seats, cards))
+    asyncio.run(a.post_match("Zook Sumo knockout", "Final", bout_of(seats), "alpha beat beta",
+                             (tmp_path / "g.mp4", 4.2), tmp_path))
+    assert r.seen == [] and made == []  # no lines, no interviews, no stills
+    a.keyboard.lines.put("/beta good luck")
+    a.keyboard.lines.put(None)  # then input ends (Enter)
+    asyncio.run(a.match_talk(seats, "about to play", "to start the game"))
+    assert [m for m, *_ in r.seen] == ["lab/beta"]  # talking to a model works without the show
+
+
+def test_trash_talk_with_showtime_shows_the_opponent(tmp_path):
+    from bamzooki import showtime
+
+    a, r, seats = contest_arena()
+    png = tmp_path / "p.png"
+    png.write_bytes(b"png")
+    cards = {s.model: showtime.ZookCard(s.zook, s.zook_name, previews={"three_quarter": str(png)}) for s in seats}
+    asyncio.run(a.trash_talk("Zook Sumo knockout", "Final", *seats, cards))
+    assert [m for m, *_ in r.seen] == ["lab/alpha", "lab/beta"]
+    first = a.entrants["lab/alpha"].messages[0]["content"]
+    assert isinstance(first, list) and "Pictures of Stomper" in first[0]["text"]
+    assert "has just said" in a.entrants["lab/beta"].messages[0]["content"][0]["text"]
+
+
+def test_announcer_only_with_showtime(tmp_path, monkeypatch):
+    import bamzooki.arena as A
+    from bamzooki.challenge import Challenge
+
+    monkeypatch.setattr(A, "load_api_key", lambda: "test-key")
+    monkeypatch.setenv("BAMZOOKI_ARENA_DIR", str(tmp_path))
+    plain = A.Arena(Challenge.load(), [], announcer="lab/host", speak=True)
+    assert plain.show is False and plain.announcer is None and plain.voice is None
+    show = A.Arena(Challenge.load(), [], show=True, announcer="lab/host")
+    assert show.announcer.model == "lab/host"
+    assert A.Arena(Challenge.load(), [], show=True, announcer=None).announcer is None  # --no-announcer
+
+
+def test_victory_speech_only_with_showtime():
+    for show in (False, True):
+        a, r, seats = contest_arena(show=show)
+
+        async def connect(model):
+            pass
+        a._connect = connect
+        asyncio.run(a.crown(seats[0], "Zook Sumo", ["beat lab/beta (Stomper) in 1 game(s)"], "1. lab/alpha"))
+        e = a.entrants["lab/alpha"]
+        assert a.entrant is e and "has just WON" in e.messages[0]["content"]  # it knows, ready for questions
+        if show:
+            assert "victory speech" in e.messages[0]["content"] and len(r.seen) == 1
+        else:
+            assert "victory speech" not in e.messages[0]["content"] and r.seen == []  # no call made

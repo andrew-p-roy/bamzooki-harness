@@ -384,6 +384,47 @@ A command-line show runner. Each challenger, given as an OpenRouter model id, ta
 
 **Repo isolation.** The model gets no file, shell or web tools: only the MCP tools. The server runs in the arena folder, and every path it accepts is a Zook reference, never a file path. Result paths shown to the model (videos) are informational only.
 
+**The show (`bamzooki.announcer`, `bamzooki.showtime`, `bamzooki.voice`).** Everything around the games that makes a session watchable. It is all optional and none of it touches scoring.
+- **`--showtime` gates every extra model call** (`[arena] showtime = true`; off by default, to save tokens and time):
+  - the announcer (and so `--speak`);
+  - the models seeing each other's Zooks and their pre-match lines (`Arena.trash_talk`);
+  - the post-match interviews and the end-of-game stills they use (`Arena.post_match`);
+  - Hall of Fame records in fact sheets and standings;
+  - the champion's victory speech.
+
+  Without it the champion still learns the result (added to its conversation, no call) and takes the audience's questions. Talking to models (`/<name> <message>`, or plain text to both) works either way. So does everything that costs no tokens: the tale of the tape on screen, the fact card, `/pick`, `/exhibition`, the highlights reel with music, and the Hall of Fame prompt and `/halloffame`.
+- **Announcer.** A separate, cheap, expressive model (default `anthropic/claude-haiku-5.5`, $0.10 / $0.50 per million tokens, sees images; `--announcer`, `--no-announcer`, `--announcer-style ringside|documentary|football|noir|<your own>`). It has no tools and keeps a 16-message memory of the evening, so it can call back to earlier moments. It speaks at five points: each challenger's introduction, each challenge game's result (from its stills), each knockout match's build-up, each knockout result plus the two interview questions, and the champion's crowning and sign-off. Its tokens and cost are a row in the `/end` table, and its lines go to `Transcripts/Announcer/<timestamp>.md`. A failed call is retried once. After three failures in a row it goes quiet, and the screen says why.
+- **Facts, not invented trivia.** `showtime.model_facts` builds a fact sheet from OpenRouter's `/models` entry:
+  - the release date, from the dated `canonical_slug` (e.g. `…-20261007`), falling back to `created` (the listing date);
+  - its age relative to today, the knowledge cutoff, context window, price, input modalities, the Artificial Analysis indices when listed, and the description;
+  - the maker and home city/country, from a `LABS` table keyed by the id prefix. Unknown labs get no country rather than a guess.
+
+  The announcer's system prompt says to use only the facts it is given. A returning knockout champion's record (from the Hall of Fame) is added to its sheet. The same sheet gives the one-line card printed under each challenger's banner.
+- **Seeing the opponent.** Before each knockout or exhibition match:
+  - a tale of the tape (weight, parts, size, moving limbs, stride speed, look) is printed, from each design's saved `.json`;
+  - the announcer gets both three-quarter previews side by side (ffmpeg `hstack`, temporary);
+  - each contestant gets the *other* Zook's three-quarter and front previews (vision models) or its one-line card (text-only models) before it gives its pre-match line.
+- **End-of-game stills.** After a match, a 2×2 sheet is cut from the deciding game's video (Go | 4 s before the end / just before the end | the end) into a temporary folder. The announcer calls the result from it, asks the winner and then the loser one interview question each, and both answer having seen the same sheet. The sheet is deleted after the interviews, and the folder when the knockout ends. Without an announcer, stock questions are used.
+- **Telling the Zooks apart.** First live test: the announcer described the winner with the *loser's* colours. "Green" and "red" are arena sides, not the Zooks' colours, so the stills alone are ambiguous. Every result prompt now carries `tell_apart`, e.g. "Sumobot: grey metal body, 6 metal limbs. BulldozerSpider: tiger body, 10 red limbs." (body colour and texture, plus the commonest limb colour). With it, the calls were right every time.
+- **Audience.** `/pick <name>` before a match predicts the winner. The result says whether the audience called it, the announcer and the interviewees hear it, and the knockout ends with the audience's score. `/exhibition <a> <b>` plays one match with the whole show between any two Zooks submitted this session, qualified or not, without touching the ranking.
+- **Keeping score across sessions.** When a knockout ends, the arena asks `Add <model> (<Zook>) to the Hall of Fame? [y/N]`. Only `y` or `yes` appends the champion to `<arena_dir>/Hall of Fame.jsonl`, which is not archived with `Zook Entries`. Enter, anything else, or no keyboard skips it, and earlier typing is cleared first, so test sessions don't create champions. Exhibitions never record. `/halloffame` prints the list. Every game of a knockout is joined into `Renders/Tournament/<timestamp> Knockout highlights - ….mp4`, and `/open` plays it.
+  - **Titled reel** (`showtime.titled_reel`): ffmpeg only, no model calls. Before each game comes a 3 s card: the round and game number, the green Zook's name (green) over its model's name, "v", then the red Zook and its model. During the game a semi-transparent bar along the top reads "<green Zook> (<model>) v <red Zook> (<model>)". The reel ends on a 4 s champion card.
+  - Cards are `color` sources with `drawtext` and fades; everything is joined with the `concat` filter and re-encoded (a 2-game reel takes about 1.5 s).
+  - Model names and Windows font paths never pass through ffmpeg's filter quoting. The font is copied, and each line of text written, into a temporary folder that ffmpeg runs in, and `drawtext` reads `textfile=`, with `expansion=none` so a `%` in a name stays literal.
+  - The font is Arial Bold, Segoe UI or DejaVu Sans, whichever exists. Without one, the games are simply joined without titles (concat demuxer, no re-encode).
+  - **Music** (`bamzooki.music`, `Music/tracks.toml`): under every game a looped track plays from its top, cut to the game's length, with a 30 ms fade-in and a 1 s fade-out at the end. The cards are silent, and the audio is concatenated alongside the video, so the two stay in sync.
+    - The tracks are original Lyria 3 clips, made through OpenRouter (`google/lyria-3-clip-preview`, $0.04 a 30 s clip; audio output needs `stream: true` and arrives as one base64 MP3 in `delta.audio.data`).
+    - **Loop points** come from `music.analyse`: ffmpeg decodes to 8 kHz mono, then plain Python works on a 10 ms RMS envelope.
+      - The tempo comes from the autocorrelation of the onset strength, and the beat phase from where onsets line up, snapped back to the earliest beat.
+      - The fade is the trailing run of 0.5 s windows more than 2 dB below the median, lasting at least 1 s.
+      - The loop is whole 4-bar phrases from the first beat that end before the fade.
+    - The detected tempos matched the requested ones within 1–2 BPM. Gemini's tempo guesses were up to 14 BPM off.
+    - For `synth_funk` (fade from 28.0 s) the loop is 12 bars, 0–24.446 s. Gemini 3.8 Flash heard the loop three times and scored both seams 10/10 ("beat kept, no dip").
+    - **Choosing a track:** the challenge's `music = "<track>"` (or `"none"`), else a track tagged with the challenge's contest, else the `default` one.
+  - **Candidates** were judged two ways: ffmpeg level measurements (first and last 2 s against the middle, to catch intros and fades) and Gemini 3.8 Flash listening to each clip played twice (for seams, 80s feel, energy and vocals). Gemini was generous (seven of eight scored 9–10 for fit) and missed an 11 dB fade that the measurement caught, so the measurements decide on fades. Gemini's notes are in `Music/analysis.json`.
+- **Voice.** `--speak` reads the announcer aloud on a background thread with the system's own speech engine: Windows `System.Speech` through PowerShell (no window, no focus stolen from the game), macOS `say`, Linux `espeak`. `--voice "Microsoft Hazel Desktop"` picks a voice. Hazel, a British voice, suits a BBC game.
+- **Cost.** A real one-match exhibition (two Haiku-class contestants, Haiku announcing, with pictures) cost about $0.0025 in total, and three introductions about $0.0007.
+
 ### Model test sessions: findings
 **Session 1: Claude Opus 4.8 via Claude Code** (entrant `claude-test-1`, `challenges/short.toml`: 3 runs, evaluation Sumo vs Spider, seed 1 at the time, green). The model was given only the MCP tools plus the agent prompt.
 - It used only MCP tools (checked in its transcript) and followed the intended loop: challenge → guide → study Spider → design → preview → test → submit.
@@ -421,6 +462,7 @@ General observations:
 
 ### M5: Competitions & search (later)
 - [x] Models compete on one challenge in the arena (`/leaderboard`: best submission per entrant).
+- [x] The show: announcer, opponent pictures, end-of-game stills for interviews, audience picks, exhibitions, Hall of Fame, highlights, voice (§7, "The show").
 - [ ] Tournaments between models across the 12 contests, with Elo ratings, saved replays and videos. A natural next step is a challenge type where the evaluation opponent is the *other entrants'* submissions; the operator-controlled challenge file may already name them.
 - [ ] Optional: parallel challengers (needs one desktop per engine, see M2), and a show layout recording the terminal and the engine window side by side.
 - [ ] Hybrid search: the model proposes a body plan and an optimiser (e.g. CMA-ES) tunes the numbers, using `run_contest` as the fitness function.

@@ -1,0 +1,81 @@
+# Match music for the knockout highlights reel (src/bamzooki/music.py).
+#
+# Every track is an original 30 s instrumental clip made with Google's Lyria 3
+# (google/lyria-3-clip-preview through OpenRouter, $0.04 a clip), so none of it carries copyright
+# claims. Each clip's prompt started with:
+#   "Instrumental only, absolutely no vocals or spoken words. Full energy from the very first beat to
+#    the very last, with no intro, no build-up, no breakdown, no ending and no fade, same tempo
+#    throughout, so it can loop seamlessly as background music for a robot-creature fighting game show."
+# followed by the `prompt` below. analysis.json has Gemini 3.8 Flash's ratings of each one.
+#
+# Under each game the part from loop_start to loop_end repeats; it fades out over a second as the
+# game ends. Loop points come from `python tools/music.py analyse Music/<file>.mp3`: the tempo, then
+# whole 4-bar phrases from the first beat that end before any fade at the end of the clip.
+#
+# Which track plays: a challenge's own `music = "<name>"` ("none" = silent), else the first track
+# whose tags include the challenge's contest (e.g. "zook sumo"), else the one with default = true.
+
+[tracks.synth_funk]
+file = "synth_funk.mp3"
+prompt = "1980s synth-funk: rubbery Minimoog-style bass, funky clavinet-like synth stabs, Roland TR-808 groove, 118 BPM, groovy, playful and upbeat."
+bpm = 117.81
+loop_start = 0.0
+loop_end = 24.446  # 12 bars; the clip fades from 28.0 s. Gemini: both loop seams 10/10, beat kept, no dip
+tags = ["funk", "groovy", "playful"]
+default = true
+
+[tracks.synthwave_gameshow]
+file = "synthwave_gameshow.mp3"
+prompt = "Upbeat 1980s synthwave game-show music: driving analog bass arpeggio, bright polysynth chords, gated-reverb drums, 128 BPM, energetic and playful."
+bpm = 127.93
+loop_start = 0.13
+loop_end = 30.146  # 16 bars, no fade
+tags = ["synthwave", "game show", "energetic"]
+
+[tracks.outrun_arcade]
+file = "outrun_arcade.mp3"
+prompt = "1980s arcade racing music in the style of an Outrun-era coin-op: punchy FM synth lead, pulsing octave bass, crisp LinnDrum-style beat, 132 BPM, sunny and exciting."
+bpm = 130.74
+loop_start = 0.19
+loop_end = 29.561  # 16 bars, no fade
+tags = ["arcade", "racing", "fast"]
+
+[tracks.saturday_cartoon]
+file = "saturday_cartoon.mp3"
+prompt = "1980s Saturday-morning cartoon action music: bouncy synth bass, cheeky square-wave melody, handclaps and drum machine, 130 BPM, fun, mischievous and upbeat."
+bpm = 130.27
+loop_start = 0.0
+loop_end = 29.477  # 16 bars, no fade
+tags = ["cartoon", "playful", "bouncy"]
+
+[tracks.training_montage]
+file = "training_montage.mp3"
+prompt = "1980s training-montage synth rock: heroic synth lead over a driving electronic beat, power-chord pads, 126 BPM, motivating and upbeat."
+bpm = 125.66
+loop_start = 0.2
+loop_end = 30.759  # 16 bars, no fade
+tags = ["heroic", "driving"]
+
+[tracks.synthpop_chip]
+file = "synthpop_chip.mp3"
+prompt = "Bright 1980s synth-pop meets home-computer chiptune: catchy bleepy lead, warm pads, electronic toms, 128 BPM, cheerful and energetic."
+bpm = 170.68  # measured; the beat may really be 128 (a 4:3 confusion): check the loop before using it
+loop_start = 0.21
+loop_end = 22.708  # 16 bars; the clip dips slightly in its last second
+tags = ["chiptune", "cheerful"]
+
+[tracks.italo_robot]
+file = "italo_robot.mp3"
+prompt = "1980s Italo-disco robot battle music: sequenced 16th-note synth bass, sparkling arpeggios, four-on-the-floor drum machine, 125 BPM, futuristic and danceable."
+bpm = 125.01
+loop_start = 0.24
+loop_end = 23.278  # 12 bars; Gemini heard a drum pickup at the start that hiccups when it loops
+tags = ["disco", "robot", "futuristic"]
+
+[tracks.eighties_sports_tv]
+file = "eighties_sports_tv.mp3"
+prompt = "1980s television sports-show theme: triumphant synth-brass stabs, slap-style synth bass, big gated snare, 124 BPM, upbeat and competitive."
+bpm = 124.18
+loop_start = 0.12
+loop_end = 23.312  # 12 bars; fades from 29.0 s
+tags = ["sports", "triumphant", "competitive"]

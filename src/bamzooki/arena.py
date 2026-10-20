@@ -15,6 +15,8 @@ prompt to talk to it. Commands:
     /open                 open the current entrant's latest video and stills
     /contest              knockout tournament between this session's qualified Zooks (a model
                           qualifies by WINNING its challenge game); the winner then makes a speech
+    /exhibition <a> <b>   one match between any two Zooks submitted this session (doesn't count)
+    /halloffame           the champions you added after a knockout (kept across sessions)
     /end                  finish: a table of every model's result, runs, tokens and cost (saved to
                           Sessions/), then Enter quits
     /list                 the queue                         /quit                leave
@@ -26,8 +28,15 @@ While a model is working you can still type: a message is handed to it after its
 Each run starts afresh: the previous Zook Entries move to Archive/<date_time>/ (--keep-entries
 carries on with them instead).
 
-In /contest both models comment before each match. Then, and after the game, talk to one with
-/<model or Zook name> <message> or type to both; Enter plays on.
+In /contest (and /exhibition), before and after each match, talk to one model with
+/<model or Zook name> <message> or type to both; Enter plays on. Before a match, /pick <name>
+predicts the winner.
+
+--showtime adds the show, at the cost of extra model calls: an announcer (--announcer, default
+anthropic/claude-haiku-5.5; --no-announcer) introduces each challenger (maker, release month,
+country, trivia) and calls the games (--speak reads it aloud); in the knockout both models see the
+other's Zook and say a line before each match, and afterwards they are interviewed with stills of
+how the game ended; returning champions' Hall of Fame records are mentioned.
 
 --verbose streams its reasoning and notes as it writes them and shows them, and its tool
 arguments, in full (normally each reply is shown when complete, cut to 100 words).
@@ -44,6 +53,7 @@ import queue
 import re
 import shutil
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -51,7 +61,9 @@ from pathlib import Path
 
 import httpx
 
-from . import tournament
+from . import music, showtime, tournament
+from .announcer import DEFAULT_MODEL as DEFAULT_ANNOUNCER
+from .announcer import Announcer
 from .challenge import Challenge, ChallengeState
 from .config import REPO_ROOT, load_config
 from .manual import MODEL_INSTRUCTIONS
@@ -64,16 +76,20 @@ KICKOFF = ("Begin the challenge now. Start with get_challenge. Work only through
 SHOW_WORDS = 100  # model text between tool calls is cut to this many words on screen (not in transcripts)
 NUDGE = ("You haven't submitted yet. Keep going with the bamzooki tools; when you're ready (or out of "
          "runs), call submit_design with your best design, then present your challenger.")
-PRE_MATCH = ("The {contest} knockout, {round}: your Zook {mine} is about to play {opp_model}'s Zook {opp_zook}. "
-             "{heard}Say something to the audience before the game: a comment, some trash talk, or a boast "
-             "about {mine}. Answer in ONE line (no line breaks, no lists) and don't call any tools.")
+PRE_MATCH = ("The {contest}, {round}: your Zook {mine} is about to play {opp_model}'s Zook {opp_zook} "
+             "({opp_card}). {seen}{heard}Say something to the audience before the game: a comment, some "
+             "trash talk, or a boast about {mine}. Answer in ONE line (no line breaks, no lists) and don't "
+             "call any tools.")
 AUDIENCE = "[{context}] Someone in the audience says to you: {msg}\n(Reply to them; don't call any tools.)"
+INTERVIEW = ("[{context}] Post-match interview. {seen}The announcer asks you: {question}\n"
+             "Answer the audience in at most 60 words (no lists, and don't call any tools).")
+STOCK_QUESTIONS = ("{name}, what won you that game?", "{name}, what happened out there?")  # no announcer
 REMARK_CHARS = 280  # the pre-match comment is one line of at most this many characters
 INTERJECTION = ("[A message from the audience, sent while you were working. Take it into account (answer "
                 "briefly if it asks something), then carry on where you were.]\n\n{}")
 
 C = {"dim": "\033[2m", "b": "\033[1m", "g": "\033[32m", "y": "\033[33m", "c": "\033[36m", "m": "\033[35m",
-     "r": "\033[31m", "x": "\033[0m"}
+     "r": "\033[31m", "a": "\033[1;33m", "x": "\033[0m"}  # a: the announcer
 
 
 def say(text: str, colour: str = "", end: str = "\n") -> None:
@@ -246,11 +262,15 @@ class Entrant:
     single_tool: bool = False  # its provider takes one tool call per reply (found out on the way)
     submission: dict | None = None  # submit_design's result
     presented: bool = False  # its presentation has been saved
+    facts: dict = field(default_factory=dict)  # showtime.model_facts: maker, home, release month...
+    to_call: dict | None = None  # a challenge game result the announcer hasn't called yet
 
 
 class Arena:
     def __init__(self, challenge: Challenge, queue: list[str], max_turns: int = 120, max_tokens: int = 4000,
-                 temperature: float | None = None, auto: bool = False, verbose: bool = False):
+                 temperature: float | None = None, auto: bool = False, verbose: bool = False,
+                 show: bool = False, announcer: str | None = DEFAULT_ANNOUNCER,
+                 announcer_style: str = "ringside", speak: bool = False, voice: str | None = None):
         self.cfg = load_config()
         self.challenge = challenge
         self.queue = list(queue)
@@ -261,9 +281,24 @@ class Arena:
         self.skip = False  # /next typed while a model worked: move on to the next challenger
         self.ending = False  # /end: finish with the session's table
         self.knockout_places: dict[str, int] = {}  # model -> place in the last /contest
+        self.picks = [0, 0]  # the audience's /pick predictions in the last /contest: right, made
         self.router = OpenRouter(load_api_key(), max_tokens, temperature)
+        # --showtime: the announcer, the models seeing each other's Zooks, the pre-match lines, the
+        # interviews and Hall of Fame mentions (all extra model calls). Off, the arena only calls the
+        # models for their own work, the champion's speech and what the audience says to them.
+        self.show = show
+        self.announcer = Announcer(self.router, announcer, announcer_style) if show and announcer else None
+        self.voice = None
+        if speak and self.announcer:
+            from .voice import Voice
+
+            self.voice = Voice(voice)
+            if not self.voice.available:
+                say("(--speak: no speech engine found on this system; the announcer stays on screen)", "y")
+                self.voice = None
         self.arena_dir = self.cfg.arena_dir
         self.arena_dir.mkdir(parents=True, exist_ok=True)
+        self.show_log = self.cfg.transcripts_dir / "Announcer" / f"{time.strftime('%Y-%m-%d_%H-%M-%S')}.md"
         self.entrant: Entrant | None = None
         self.entrants: dict[str, Entrant] = {}  # everyone called this session, in order
         self.session = None
@@ -329,6 +364,46 @@ class Arena:
         with e.transcript.open("a", encoding="utf-8") as f:
             f.write(f"\n### {kind} ({time.strftime('%H:%M:%S')})\n\n{text}\n")
 
+    def _announce(self, text: str, who: str = "ANNOUNCER") -> None:
+        """The announcer speaks: printed in its own colour and kept in Transcripts/Announcer/."""
+        if not text:
+            if (host := getattr(self, "announcer", None)) and host.last_error:
+                say(f"\n  [the announcer missed that one: {host.last_error}"
+                    f"{'; it has gone quiet for the rest of the show' if host.quiet else ''}]", "dim")
+            return
+        say(f"\n  {who}: ", "a", end="")
+        say(text, "a")
+        if getattr(self, "voice", None):
+            self.voice.say(text)
+        try:
+            self.show_log.parent.mkdir(parents=True, exist_ok=True)
+            with self.show_log.open("a", encoding="utf-8") as f:
+                f.write(f"\n### {who} ({time.strftime('%H:%M:%S')})\n\n{text}\n")
+        except OSError:
+            pass
+
+    async def _call_challenge_game(self, e: Entrant) -> None:
+        """The announcer calls a challenge game from its result and stills."""
+        d, e.to_call = e.to_call, None
+        game = d.get("game") or {}
+        how = " at the time limit" if d.get("outcome") == "draw" and d.get("status") == "timeout" else ""
+        mine = showtime.zook_card(self.cfg.zoo_dir, d.get("design", "?"))
+        side = game.get("side", "green")
+        names = {side: mine.name, "red" if side == "green" else "green": game.get("opponent", "its opponent")}
+        details = []
+        if d.get("finish_after_go_s") is not None:
+            details.append(f"decided {d['finish_after_go_s']} s after Go")
+        if fell := [names.get(c, c) for c, f in (d.get("fell") or {}).items() if f]:
+            details.append("fell off: " + ", ".join(fell))
+        details.append("a win qualifies it for tonight's knockout" if d.get("outcome") == "win" else
+                       "only a win qualifies for tonight's knockout, so it won't be in it")
+        stills = showtime.image_part(d["stills"]) if d.get("stills") else None
+        apart = (f"{showtime.tell_apart(mine)} The other one is {game.get('opponent', 'its opponent')}."
+                 if mine.looks() else "")
+        self._announce(await self.announcer.challenge_call(
+            e.model, mine.name, game.get("contest", "?"), game.get("opponent", "?"),
+            f"{str(d.get('outcome', '?')).upper()}{how}", "; ".join(details), stills, apart))
+
     # --- the agent loop ---
     async def start(self, model: str) -> None:
         info = await self.router.model_info(model)
@@ -349,9 +424,15 @@ class Arena:
         tdir.mkdir(parents=True, exist_ok=True)
         self.entrant.transcript = tdir / f"{time.strftime('%Y-%m-%d_%H-%M-%S')}.md"
         self.entrant.transcript.write_text(f"# {model} - {self.challenge.title}\n", encoding="utf-8")
+        self.entrant.facts = showtime.model_facts(model, info)
+        if self.show and (record := showtime.arena_record(showtime.hall_of_fame(self.arena_dir), model)):
+            self.entrant.facts["arena_record"] = record
         say(f"\n=== Challenger: {model} ===", "b")
-        say(f"    vision: {'yes' if vision else 'no'}  |  challenge: {self.challenge.title}  |  "
-            f"arena: {self.arena_dir}", "dim")
+        say(f"    {showtime.card_line(self.entrant.facts)}", "dim")
+        say(f"    challenge: {self.challenge.title}  |  arena: {self.arena_dir}", "dim")
+        if self.announcer:
+            self._announce(await self.announcer.introduce(len(self.entrants), self.challenge.title,
+                                                          self.entrant.facts))
         await self._connect(model)
         system = PROMPT_PATH.read_text(encoding="utf-8") + (
             f"\n\nYou are registered as the entrant \"{model}\" (your full model name); you don't need "
@@ -457,6 +538,8 @@ class Arena:
             if images and e.vision:
                 e.messages.append({"role": "user", "content": [
                     {"type": "text", "text": "Images returned by the tool call(s) above:"}, *images]})
+            if e.to_call and self.announcer:
+                await self._call_challenge_game(e)
         say(f"[stopped after {self.max_turns} turns]", "y")
 
     async def _run_tool(self, call: dict) -> list[dict]:
@@ -518,7 +601,7 @@ class Arena:
                    "draw" if d.get("status") == "finished" else f"no result ({d.get('status')})")
             say(f"     {d.get('contest')}: {d.get('green')} vs {d.get('red')} -> {res}", "g")
         elif name == "submit_design" and "outcome" in d:
-            e.submitted, e.design, e.submission = True, d["design"], d
+            e.submitted, e.design, e.submission, e.to_call = True, d["design"], d, d
             e.qualified = e.qualified or d["outcome"] == "win"
             how = " (time limit)" if d["outcome"] == "draw" and d.get("status") == "timeout" else ""
             say(f"     SUBMITTED {d['design']}: {d['outcome'].upper()}{how} (score {d['score']})", "m")
@@ -598,6 +681,22 @@ class Arena:
             q = "  qualified" if best and best["outcome"] == "win" else ""
             say(f"  {name:45s} {res}  ({used} runs){q}")
 
+    def hall(self) -> None:
+        """/halloffame: the knockout champions added so far, and the most titles."""
+        hall = showtime.hall_of_fame(self.arena_dir)
+        say(f"\n  Hall of Fame ({self.arena_dir / showtime.HALL_OF_FAME})", "b")
+        if not hall:
+            say("  (no champions yet: win a /contest knockout to get in)", "dim")
+            return
+        rows = [[str(h.get("date", ""))[:16], str(h.get("champion", "?")), str(h.get("zook_name", "?")),
+                 str(h.get("contest", "")), str(h.get("field", "")), str(h.get("runner_up") or "-")] for h in hall]
+        for line in _table(["Date", "Champion", "Zook", "Contest", "Field", "Runner-up"], rows):
+            say(f"  {line}")
+        from collections import Counter
+
+        best = Counter(h.get("champion") for h in hall).most_common(3)
+        say("  Most titles: " + ", ".join(f"{m} ({n})" for m, n in best), "m")
+
     def open_media(self) -> None:
         if not self.entrant or not self.entrant.last_media:
             say("Nothing to open yet.", "dim")
@@ -607,10 +706,24 @@ class Arena:
                 os.startfile(p)  # noqa: S606 (local media files we produced)
                 say(f"opened {p}", "dim")
 
-    async def contest(self) -> None:
+    async def exhibition(self, arg: str) -> None:
+        """/exhibition <a> <b>: one match, with the whole show, between two Zooks submitted this
+        session (qualified or not). It doesn't change the knockout ranking."""
+        seats = [tournament.Seat(e.model, e.design) for e in self.entrants.values() if e.design]
+        names = ", ".join(_short_name(s.model) for s in seats) or "nobody has submitted yet"
+        picked = [_find_seat(seats, w) for w in arg.split()]
+        if len(picked) != 2 or None in picked or picked[0] is picked[1]:
+            say(f"usage: /exhibition <model> <model>, two of this session's submitted Zooks: {names} "
+                "(a model's name or its Zook's name; any part only one of them has)", "y")
+            return
+        await self.contest(picked, exhibition=True)
+
+    async def contest(self, seats: list[tournament.Seat] | None = None, exhibition: bool = False) -> None:
         """Knockout between the Zooks that won their challenge game this session, then the
-        winner's speech; the audience's next messages go to the winner."""
-        seats = [tournament.Seat(e.model, e.design) for e in self.entrants.values() if e.qualified and e.design]
+        winner's speech; the audience's next messages go to the winner. exhibition: one match
+        between the two given seats, without the speech or a ranking."""
+        if seats is None:
+            seats = [tournament.Seat(e.model, e.design) for e in self.entrants.values() if e.qualified and e.design]
         if len(seats) < 2:
             names = ", ".join(s.billing() for s in seats) or "nobody yet"
             say(f"A contest needs two qualified Zooks (a win in the challenge game); qualified: {names}.", "y")
@@ -622,20 +735,29 @@ class Arena:
         engine.prepare()
         zoo = Zoo(engine.install, examples_root=engine.root / "Teams" / "examples" / "Creatures")
         info = contests.find(self.challenge.evaluation.contest, engine.install)
+        event = f"{info.name} {'exhibition' if exhibition else 'knockout'}"
 
-        now = {"round": "", "game": 0}  # for the video titles
+        now = {"round": "", "game": 0, "last": None}  # video titles; the last game's (video, finish)
+        reel: list[showtime.ReelGame] = []  # every game, for the highlights
+        cards = {s.model: showtime.zook_card(self.cfg.zoo_dir, s.zook) for s in seats}
+        picks = [0, 0]  # the audience's /pick predictions: right, made
+        pictures = Path(tempfile.mkdtemp(prefix="bamzooki-knockout-"))  # end-of-game stills, deleted after
 
         def play(green: tournament.Seat, red: tournament.Seat, seed: int) -> tuple[str, str | None, str]:
             job = Job(info, zoo.resolve(green.zook).path, zoo.resolve(red.zook).path, seed=seed,
                       duration=self.challenge.time_limit, video=True, model="Tournament")
             r = engine.run(job, name=f"cup-{info.contest_file}")
             now["game"] += 1
-            if r.video:  # a copy for each competitor, beside its test videos
+            now["last"] = (r.video, r.finish_time) if r.video else None
+            if r.video:  # for the highlights, and a copy for each competitor beside its test videos
+                reel.append(showtime.ReelGame(r.video, f"{event} - {now['round']} - game {now['game']}",
+                                              (green.model, green.zook_name), (red.model, red.zook_name)))
                 for me, opp in ((green, red), (red, green)):
                     if me.folder == "examples":
                         continue
                     _keep_video(r.video, self.cfg.zoo_dir / me.folder / "Videos",
-                                f"Knockout {now['round']} game {now['game']} - {self.challenge.name} - {info.name} - "
+                                f"{'Exhibition' if exhibition else 'Knockout ' + now['round']} game {now['game']} - "
+                                f"{self.challenge.name} - {info.name} - "
                                 f"{me.zook_name} vs {opp.zook_name} ({opp.model}) - seed {seed}")
             return r.status, r.winner, _game_stats(r, green.zook_name, red.zook_name)
 
@@ -643,41 +765,69 @@ class Arena:
         matches = [len(seats) - 1]  # matches still to play (a knockout of n has n - 1), to word the prompt
 
         def before(a: tournament.Seat, b: tournament.Seat, round_name: str) -> None:
-            """Both models comment (the second hears the first), then the audience may answer."""
+            """The tale of the tape and the announcer's build-up; both models see the other's Zook and
+            comment (the second hears the first), then the audience may answer."""
             # "Semi-finals" -> "Semi-final" for one match's videos
             now["round"], now["game"] = round_name[:-1] if round_name.endswith("finals") else round_name, 0
 
             async def talk():
-                heard = ""
-                for me, opp in ((a, b), (b, a)):
-                    line = await self.remark(me, PRE_MATCH.format(
-                        contest=info.name, round=round_name, mine=me.zook_name, opp_model=opp.model,
-                        opp_zook=opp.zook_name, heard=heard), one_line=True)
-                    heard = f'{me.model} has just said: "{line}" ' if line else ""
-                await self.match_talk([a, b], f"{info.name} knockout, {round_name}: "
-                                              f"{a.billing()} v {b.billing()}, about to play", "to start the game")
+                await self.preview_match(event, round_name, a, b, cards[a.model], cards[b.model], pictures)
+                await self.trash_talk(event, round_name, a, b, cards)
+                now["pick"] = {}
+                await self.match_talk([a, b], f"{event}, {round_name}: "
+                                              f"{a.billing()} v {b.billing()}, about to play", "to start the game",
+                                      pick=now["pick"])
             asyncio.run_coroutine_threadsafe(talk(), loop).result()
 
         def after(bout: tournament.Bout) -> None:
             matches[0] -= 1
             result = (f"{bout.winner.billing()} beat {bout.loser.billing()} in {len(bout.games)} game(s)"
                       + (" on a coin toss" if bout.how == "coin toss" else ""))
-            nxt = "for the next match" if matches[0] else "for the final ranking"
-            asyncio.run_coroutine_threadsafe(self.match_talk(
-                [bout.a, bout.b], f"{info.name} knockout, just played: {result}", nxt), loop).result()
+            nxt = "for the next match" if matches[0] else "to finish" if exhibition else "for the final ranking"
+            last, now["last"] = now["last"], None
+            if picked := (now.pop("pick", None) or {}).get("seat"):
+                right = picked is bout.winner
+                picks[0], picks[1] = picks[0] + right, picks[1] + 1
+                say(f"\n  The audience picked {picked.zook_name}: "
+                    + ("called it!" if right else "wrong this time."), "m" if right else "y")
+                result += f". The audience had picked {picked.zook_name}" + (" and called it" if right else "")
 
-        say(f"\n*** THE {info.name.upper()} KNOCKOUT: {len(seats)} qualified Zooks ***", "b")
+            async def talk():
+                await self.post_match(event, now["round"], bout, result, last, pictures,
+                                      showtime.tell_apart(cards[bout.a.model], cards[bout.b.model]))
+                await self.match_talk([bout.a, bout.b], f"{event}, just played: {result}", nxt)
+            asyncio.run_coroutine_threadsafe(talk(), loop).result()
+
+        say(f"\n*** THE {event.upper()}: " + ("an exhibition match ***" if exhibition else
+                                              f"{len(seats)} qualified Zooks ***"), "b")
         for s in seats:
             say(f"    {s.billing()}  [{s.zook}]")
         say("    Leave the game window in front while the games play. Between games, talk to a model with "
             "/<its name or its Zook's name> <message>, type to both, or press Enter to go on.", "dim")
-        rounds, places = await asyncio.to_thread(tournament.knockout, seats, play, say, before=before, after=after)
+        try:
+            rounds, places = await asyncio.to_thread(tournament.knockout, seats, play, say, before=before,
+                                                     after=after,
+                                                     round_title="Exhibition match" if exhibition else None)
+        finally:
+            shutil.rmtree(pictures, ignore_errors=True)
         champ = places[0][1]
-        self.knockout_places = {s.model: p for p, s in places}
+        if exhibition:
+            say(f"\n*** {champ.model} wins the exhibition with {champ.zook_name}! ***", "m")
+            return
+        self.knockout_places, self.picks = {s.model: p for p, s in places}, picks
         say("\n  Final ranking", "b")
         for place, s in places:
             say(f"  {place:>2}. {s.billing()}")
+        if picks[1]:
+            say(f"\n  The audience's picks: {picks[0]} of {picks[1]} right", "m")
         say(f"\n*** {champ.model} WINS THE KNOCKOUT with {champ.zook_name}! ***", "m")
+        reel_path = None
+        if len(reel) > 1:
+            name = f"{time.strftime('%Y-%m-%d_%H-%M-%S')} Knockout highlights - {self.challenge.name} - {info.name}.mp4"
+            track = music.pick_track(music.load_tracks(), self.challenge)
+            if reel_path := showtime.highlights(reel, self.cfg.render_dir / "Tournament" / name,
+                                                champion=(champ.model, champ.zook_name), music=track):
+                say(f"    highlights: {reel_path}  (/open plays it)", "dim")
 
         path = []
         for b in (b for bouts in rounds for b in bouts if b.b is not None and champ in (b.a, b.b)):
@@ -685,23 +835,120 @@ class Arena:
             path.append(f"beat {other.billing()} in {len(b.games)} game(s)"
                         + (" on a coin toss" if b.how == "coin toss" else ""))
         standings = "; ".join(f"{p}. {s.billing()}" for p, s in places)
+        record = showtime.arena_record(showtime.hall_of_fame(self.arena_dir), champ.model) if self.show else None
+        if await self.confirm(f"\nAdd {champ.billing()} to the Hall of Fame? [y/N] "):
+            showtime.record_champion(self.arena_dir, {
+                "challenge": self.challenge.title, "contest": info.name, "champion": champ.model,
+                "zook": champ.zook, "zook_name": champ.zook_name, "field": len(seats),
+                "runner_up": places[1][1].model if len(places) > 1 else None, "path": path})
+            say(f"    added to the Hall of Fame ({self.arena_dir / showtime.HALL_OF_FAME})", "m")
+        else:
+            say("    not added to the Hall of Fame", "dim")
+        if record:
+            standings += f". Its record before tonight: {record}"
+        if reel:  # /open plays the highlights (else the last game)
+            self.entrants[champ.model].last_media = [str(reel_path or reel[-1].video)]
+        await self.crown(champ, info.name, path, standings)
+
+    async def crown(self, champ: tournament.Seat, contest: str, path: list[str], standings: str) -> None:
+        """The champion takes the floor: with --showtime the announcer crowns it and it gives a
+        victory speech; either way it knows the result and the audience's next messages go to it."""
+        if self.announcer:
+            self._announce(await self.announcer.champion(champ.model, contest, champ.zook_name,
+                                                         "; ".join(path), standings))
         self.entrant = self.entrants[champ.model]
         await self._connect(champ.model)
-        prompt = (f"Your Zook {champ.zook_name} has just WON the {info.name} knockout tournament between the "
-                  f"qualified models' Zooks. Your path: {'; '.join(path)}. Final ranking: {standings}. "
-                  "Give the audience a short victory speech (under 150 words). After that the audience may "
-                  "ask you questions.")
+        prompt = (f"Your Zook {champ.zook_name} has just WON the {contest} knockout tournament between the "
+                  f"qualified models' Zooks. Your path: {'; '.join(path)}. Final ranking: {standings}. ")
+        # --showtime: a victory speech now. Without it the champion just knows the result (no call),
+        # ready for the audience's questions.
+        prompt += ("Give the audience a short victory speech (under 150 words). After that the audience may ask "
+                   "you questions." if self.show else "The audience may now ask you questions.")
         self.entrant.messages.append({"role": "user", "content": prompt})
         self._log("runner", prompt)
-        await self.converse()
+        if self.show:
+            await self.converse()
         say("\n(Questions for the champion: just type them. /next or /challenger carries on.)", "dim")
 
-    async def remark(self, seat: tournament.Seat, prompt: str, one_line: bool = False) -> str:
+    async def preview_match(self, contest: str, round_name: str, a: tournament.Seat, b: tournament.Seat,
+                            card_a: showtime.ZookCard, card_b: showtime.ZookCard, folder: Path) -> None:
+        """The tale of the tape on screen, then the announcer builds the match up from both Zooks' pictures."""
+        say("")
+        for line in showtime.tale_of_the_tape(card_a, card_b, _short_name(a.model), _short_name(b.model)):
+            say(f"    {line}", "dim")
+        if not self.announcer:
+            return
+        versus = None
+        if (pa := card_a.picture("three_quarter")) and (pb := card_b.picture("three_quarter")):
+            versus = showtime.versus_card(pa[0], pb[0], folder / f"versus-{time.time_ns()}.png")
+        side = [(s.model, self.entrants[s.model].facts.get("country", ""), s.zook_name) for s in (a, b)]
+        try:
+            self._announce(await self.announcer.match(contest, round_name, side[0], side[1],
+                                                      showtime.tale_of_the_tape(card_a, card_b, a.model, b.model),
+                                                      showtime.image_part(versus) if versus else None))
+        finally:
+            if versus:
+                versus.unlink(missing_ok=True)
+
+    async def trash_talk(self, contest: str, round_name: str, a: tournament.Seat, b: tournament.Seat,
+                         cards: dict[str, showtime.ZookCard]) -> None:
+        """--showtime: each model sees the other's Zook (pictures, or its stats if it can't see) and
+        says one line to the audience; the second hears the first."""
+        if not self.show:
+            return
+        heard = ""
+        for me, opp in ((a, b), (b, a)):
+            card = cards[opp.model]
+            pics = [showtime.image_part(p) for p in card.picture()] if self.entrants[me.model].vision else []
+            seen = f"Pictures of {opp.zook_name} are attached. " if any(pics) else ""
+            line = await self.remark(me, PRE_MATCH.format(
+                contest=contest, round=round_name, mine=me.zook_name, opp_model=opp.model,
+                opp_zook=opp.zook_name, opp_card=card.summary(), seen=seen, heard=heard),
+                one_line=True, images=pics)
+            heard = f'{me.model} has just said: "{line}" ' if line else ""
+
+    async def post_match(self, contest: str, round_name: str, bout: tournament.Bout, result: str,
+                         last: tuple | None, folder: Path, apart: str = "") -> None:
+        """--showtime: how the deciding game ended, as stills (temporary): the announcer calls it,
+        then interviews the winner and the loser, who see the same stills."""
+        if not self.show:
+            return
+        game = bout.games[-1] if bout.games else None
+        stills = None
+        if last and last[0]:
+            stills = showtime.end_of_game_stills(last[0], last[1], folder / f"end-{time.time_ns()}.png")
+        picture = showtime.image_part(stills) if stills else None
+        try:
+            if self.announcer and game:
+                self._announce(await self.announcer.game_call(contest, round_name, game.green.billing(),
+                                                              game.red.billing(), result, game.stats, picture,
+                                                              apart))
+            for seat, won in ((bout.winner, True), (bout.loser, False)):
+                question = ""
+                if self.announcer:
+                    question = await self.announcer.question(round_name, result, seat.model, seat.zook_name, won)
+                question = question or STOCK_QUESTIONS[0 if won else 1].format(name=_short_name(seat.model))
+                self._announce(question, "ANNOUNCER" if self.announcer else "INTERVIEW")
+                vision = self.entrants[seat.model].vision and picture
+                seen = (f"Stills of the deciding game are attached ({showtime.END_LABELS}). {apart} " if vision else
+                        f"The deciding game: {game.stats}. " if game and game.stats else "")
+                await self.remark(seat, INTERVIEW.format(context=f"{contest}, {round_name}: {result}",
+                                                         seen=seen, question=question),
+                                  images=[picture] if vision else None)
+        finally:
+            if stills:
+                stills.unlink(missing_ok=True)
+
+    async def remark(self, seat: tournament.Seat, prompt: str, one_line: bool = False,
+                     images: list[dict | None] | None = None) -> str:
         """A contestant's answer in its own conversation (no tools): printed and returned. The
-        pre-match comment is held to one line."""
+        pre-match comment is held to one line. Pictures go only to models that can see them."""
         e = self.entrants[seat.model]
-        e.messages.append({"role": "user", "content": prompt})
-        self._log("runner", prompt, e)
+        images = [i for i in images or [] if i] if e.vision else []
+        content = [{"type": "text", "text": prompt}, *images] if images else prompt
+        e.messages.append({"role": "user", "content": content})
+        _prune_images(e.messages, keep=2)
+        self._log("runner", prompt + (f" [{len(images)} picture(s)]" if images else ""), e)
         try:
             # tools stay declared (some providers require it once a history has tool calls) but unused
             data = await self.router.chat(e.model, e.messages, self.tools, single_tool=e.single_tool,
@@ -722,9 +969,11 @@ class Arena:
         say(line or "(no comment)")
         return line
 
-    async def match_talk(self, seats: list[tournament.Seat], context: str, enter: str) -> None:
+    async def match_talk(self, seats: list[tournament.Seat], context: str, enter: str,
+                         pick: dict | None = None) -> None:
         """Between games: '/<name> message' to one contestant, plain text to both, Enter to go on.
-        Lines typed while a game played are taken first."""
+        Lines typed while a game played are taken first. With `pick` (before a match), '/pick <name>'
+        predicts the winner: pick["seat"] is set."""
         if not self.keyboard:
             return
         pending = self.keyboard.drain()
@@ -733,12 +982,22 @@ class Arena:
             if pending:
                 line = pending.pop(0)
             else:
-                say(f"\n  [Enter] {enter}  ({hint} <message> to one, or type to both) ", "dim", end="")
+                picking = ", /pick <name> to call the winner" if pick is not None and "seat" not in pick else ""
+                say(f"\n  [Enter] {enter}  ({hint} <message> to one, or type to both{picking}) ", "dim", end="")
                 line = await asyncio.to_thread(self.keyboard.get)
             if line is None or not line.strip():
                 return
             line = line.strip()
             targets, msg = seats, line
+            if pick is not None and line.split()[0] == "/pick":
+                seat = _find_seat(seats, line[5:])
+                if seat:
+                    pick["seat"] = seat
+                    say(f"  Your pick: {seat.billing()}", "m")
+                else:
+                    say(f"  /pick <name>: one of {', '.join(_short_name(s.model) for s in seats)} "
+                        "(or a Zook's name)", "y")
+                continue
             if line.startswith("/"):
                 who, _, msg = line[1:].partition(" ")
                 seat = _find_seat(seats, who)
@@ -753,6 +1012,16 @@ class Arena:
                 self._log("audience", msg.strip(), self.entrants[s.model])
                 await self.remark(s, AUDIENCE.format(context=context, msg=msg.strip()))
 
+    async def confirm(self, question: str) -> bool:
+        """A yes/no question at the keyboard; only 'y' or 'yes' is yes (Enter, anything else, or no
+        keyboard is no). Lines typed earlier are cleared first, so they can't answer it."""
+        if not self.keyboard:
+            return False
+        self.keyboard.drain()
+        say(question, "b", end="")
+        answer = await asyncio.to_thread(self.keyboard.get)
+        return (answer or "").strip().lower() in ("y", "yes")
+
     async def offer_contest(self) -> None:
         """When the queue has run out, ask whether to play the knockout now."""
         if self.queue or not self.keyboard or self.ending:
@@ -762,11 +1031,8 @@ class Arena:
             say(f"\nThe queue is empty. {len(qualified)} model(s) qualified: /contest needs two "
                 "(add more with /challenger <model>).", "dim")
             return
-        self.keyboard.drain()
-        say(f"\nThe queue is empty and {len(qualified)} models have qualified. Run the knockout contest now? [Y/N] ",
-            "b", end="")
-        answer = await asyncio.to_thread(self.keyboard.get)
-        if (answer or "").strip().lower() in ("y", "yes"):
+        if await self.confirm(f"\nThe queue is empty and {len(qualified)} models have qualified. "
+                              "Run the knockout contest now? [Y/N] "):
             await self.contest()
         else:
             say("No contest for now: /contest starts it whenever you like.", "dim")
@@ -792,6 +1058,7 @@ class Arena:
                 await self._safely(self.start(self.queue.pop(0)))
             self.leaderboard()
             await self._disconnect()
+            await self.sign_off()
             self.summary()
             return
         while not self.ending:
@@ -832,6 +1099,10 @@ class Arena:
                 await self.status()
             elif cmd == "/contest":
                 await self.contest()
+            elif cmd == "/exhibition":
+                await self.exhibition(arg)
+            elif cmd in ("/halloffame", "/hall"):
+                self.hall()
             elif cmd.startswith("/"):
                 say("unknown command; /help lists them", "y")
             else:
@@ -846,12 +1117,39 @@ class Arena:
                 self.skip = False
         await self._disconnect()
         if self.ending:
+            await self.sign_off()
             self.summary()
             if self.keyboard:
                 self.keyboard.drain()
                 say("\nPress Enter to quit. ", "b", end="")
                 await asyncio.to_thread(self.keyboard.get)
         say("bye", "dim")
+
+    async def sign_off(self) -> None:
+        """The announcer closes the show with how the evening went."""
+        if not self.announcer or not self.entrants:
+            return
+        self._announce(await self.announcer.closing(self.story()))
+
+    def story(self) -> str:
+        """The session in a few sentences (for the announcer): each model's result and the knockout."""
+        parts = []
+        for e in self.entrants.values():
+            s = e.submission or {}
+            zook = (e.design or "").split("/", 1)[-1].split("@", 1)[0]
+            res = f"{str(s.get('outcome')).upper()} in its challenge game with {zook}" if s else "didn't submit"
+            if e.model in self.knockout_places:
+                res += f", {_place(self.knockout_places, e.model)} in the knockout"
+            parts.append(f"{e.model}: {res}.")
+        champ = [m for m, p in self.knockout_places.items() if p == 1]
+        if champ:
+            parts.append(f"Champion: {champ[0]}.")
+        elif not self.knockout_places:
+            parts.append("No knockout was played.")
+        picks = getattr(self, "picks", [0, 0])
+        if picks[1]:
+            parts.append(f"The audience predicted {picks[0]} of {picks[1]} knockout matches right.")
+        return " ".join(parts)
 
     def summary(self) -> Path | None:
         """The session in one table: every model called, its Zook, result, runs, knockout place,
@@ -870,9 +1168,13 @@ class Arena:
                          f"{s['score']:g}" if "score" in s else "-", "yes" if e.qualified else "no",
                          f"{runs} of {self.challenge.runs or 'unlimited'}",
                          _place(self.knockout_places, e.model), f"{e.tokens:,}", f"${e.cost:.4f}"])
+        tokens, cost = sum(e.tokens for e in self.entrants.values()), sum(e.cost for e in self.entrants.values())
+        if host := getattr(self, "announcer", None):
+            rows.append([f"(announcer) {host.model}", "-", "-", "-", "-", "-", "-", f"{host.tokens:,}",
+                         f"${host.cost:.4f}"])
+            tokens, cost = tokens + host.tokens, cost + host.cost
         total = ["TOTAL", "", "", "", f"{sum(e.qualified for e in self.entrants.values())} qualified", "", "",
-                 f"{sum(e.tokens for e in self.entrants.values()):,}",
-                 f"${sum(e.cost for e in self.entrants.values()):.4f}"]
+                 f"{tokens:,}", f"${cost:.4f}"]
         lines = _table(["Model", "Zook", "Challenge game", "Score", "Qualified", "Test runs", "Knockout",
                         "Tokens", "Cost"], rows, total)
         title = f"BAMZOOKi Arena - {self.challenge.title} - session ending {time.strftime('%Y-%m-%d %H:%M')}"
@@ -1084,6 +1386,23 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--verbose", "-v", action="store_true",
                     help="stream the model's reasoning and notes as it writes them, and show them and "
                          "its tool arguments in full (not cut to 100 words)")
+    ap.add_argument("--showtime", action="store_true", default=bool(a_cfg.get("showtime", False)),
+                    help="the show, at the cost of extra model calls: an announcer introduces the challengers and "
+                         "calls the games; in the knockout the models see each other's Zooks, trade pre-match "
+                         "lines and are interviewed with stills of how each game ended; Hall of Fame records are "
+                         "mentioned ([arena] showtime). Talking to the models works either way")
+    ap.add_argument("--announcer", default=a_cfg.get("announcer", DEFAULT_ANNOUNCER),
+                    help=f"with --showtime: the OpenRouter model that runs the show (default {DEFAULT_ANNOUNCER}; "
+                         f"[arena] announcer)")
+    ap.add_argument("--no-announcer", action="store_true", help="with --showtime: the show without an announcer")
+    ap.add_argument("--announcer-style", default=a_cfg.get("announcer_style", "ringside"),
+                    help="with --showtime: ringside (default), documentary, football, noir, or your own description "
+                         "of a style")
+    ap.add_argument("--speak", action="store_true", default=bool(a_cfg.get("speak", False)),
+                    help="with --showtime: the announcer speaks out loud (Windows speech, macOS say, Linux espeak; "
+                         "[arena] speak)")
+    ap.add_argument("--voice", default=a_cfg.get("voice"),
+                    help='speech voice, e.g. "Microsoft Hazel Desktop" ([arena] voice; default: the system\'s)')
     a = ap.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1092,7 +1411,9 @@ def main(argv: list[str] | None = None) -> None:
         challenge_path = REPO_ROOT / challenge_path
     challenge = Challenge.load(challenge_path)
     queue = a.challenger or list(a_cfg.get("challengers", []))
-    arena = Arena(challenge, queue, a.max_turns, a.max_tokens, a.temperature, a.auto, a.verbose)
+    arena = Arena(challenge, queue, a.max_turns, a.max_tokens, a.temperature, a.auto, a.verbose, show=a.showtime,
+                  announcer=None if a.no_announcer or str(a.announcer).lower() in ("", "none", "off") else a.announcer,
+                  announcer_style=a.announcer_style, speak=a.speak, voice=a.voice)
     if not a.keep_entries and (moved := arena.archive_entries()):
         say(f"Previous Zook Entries archived to {moved}: every model starts afresh (--keep-entries to carry on).",
             "dim")

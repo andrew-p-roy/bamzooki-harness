@@ -5,6 +5,7 @@ A challenge is a TOML file (see challenges/default.toml):
     name = "default"                 # used in state file names
     title = "..."
     description = \"\"\"...\"\"\"          # shown to the model by get_challenge
+    music = "synth_funk"             # optional: the highlights reel's track (Music/tracks.toml; "none" = silent)
     [budget]
     runs = 20                        # test runs (one game each) the model may use (0 = unlimited)
     counts = ["run_contest", "run_trial"]
@@ -63,6 +64,7 @@ class Challenge:
     submissions: int = 1
     draw_points: float = 0.0  # a draw (no winner, e.g. time limit) counts this much of a win
     time_limit: float = 120.0  # seconds of play after Go in every contest (tests and evaluation)
+    music: str = ""  # highlights-reel track from Music/tracks.toml ("" = chosen by contest/default, "none" = silent)
     path: Path | None = None
 
     @classmethod
@@ -88,7 +90,8 @@ class Challenge:
                    counts=tuple(budget.get("counts", ("run_contest", "run_trial"))),
                    submissions=int(budget.get("submissions", 1)),
                    draw_points=float(raw.get("scoring", {}).get("draw", 0.0)),
-                   time_limit=float(raw.get("scoring", {}).get("time_limit", 120.0)), path=path)
+                   time_limit=float(raw.get("scoring", {}).get("time_limit", 120.0)),
+                   music=str(raw.get("music", "")), path=path)
 
     def describe(self) -> dict:
         return {"title": self.title, "description": self.description,

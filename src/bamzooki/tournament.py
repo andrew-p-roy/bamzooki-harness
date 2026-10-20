@@ -101,15 +101,17 @@ def knockout(seats: list[Seat], play: Play, say: Say, rng: random.Random | None 
              games_per_bout: int = 3,
              before: Callable[[Seat, Seat, str], None] = lambda a, b, r: None,
              after: Callable[[Bout], None] = lambda b: None,
+             round_title: str | None = None,
              ) -> tuple[list[list[Bout]], list[tuple[int, Seat]]]:
     """Play the whole bracket. Returns the rounds and the ranking [(place, seat)], shared places
-    for entrants knocked out in the same round."""
+    for entrants knocked out in the same round. round_title names every round (e.g. "Exhibition
+    match" for a single match) instead of "Final", "Semi-finals", ..."""
     rng = rng or random.Random()
     alive = list(seats)
     rng.shuffle(alive)
     rounds: list[list[Bout]] = []
     while len(alive) > 1:
-        name = round_name(len(alive), len(rounds) + 1)
+        name = round_title or round_name(len(alive), len(rounds) + 1)
         say(f"\n  === {name} ===", "b")
         bouts = []
         for i in range(0, len(alive) - 1, 2):

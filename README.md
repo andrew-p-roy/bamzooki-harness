@@ -44,6 +44,9 @@ calling, from [openrouter.ai/models](https://openrouter.ai/models)):
 | anything else | Talks to the current model, e.g. "why four legs?" |
 | `/leaderboard` | Everyone's result so far |
 | `/contest` | Knockout tournament between the Zooks that **won** their challenge game this session. The champion then gives a speech and takes your questions |
+| `/pick <name>` | Before a knockout match: predict the winner (you're scored at the end) |
+| `/exhibition <a> <b>` | One match between any two Zooks submitted this session, qualified or not (with the show if `--showtime`) |
+| `/halloffame` | The champions you chose to add after a knockout, across sessions |
 | `/open` | Plays the current model's latest video |
 | `/status` | The current model's runs left |
 | `/end` | Finishes the session: one table of every model's Zook, result, test runs, knockout place, tokens and cost (with totals), saved to `Sessions/`. Enter then quits |
@@ -63,8 +66,19 @@ Tips:
   submissions) move to `Archive/<date_time>/Zook Entries/`, so each model gets another go. Add
   `--keep-entries` to carry on from the last session instead.
 - Token use and cost are printed after each reply.
+- Add **`--showtime`** for the full show, at the cost of some extra model calls:
+  - an **announcer** (Claude Haiku 5.5 by default, a fraction of a cent per line) introduces each
+    challenger with its maker, release month and year, country and some trivia, then calls the games;
+  - in the knockout the models **see each other's Zooks** and trade a line before each match, and
+    afterwards they're interviewed with stills of how the game ended;
+  - the champion gives a victory speech.
 
-Full details are in [The arena](#the-arena-models-compete-openrouter) below.
+  With it, `--speak` reads the announcer aloud (Windows speech; try
+  `--voice "Microsoft Hazel Desktop"`), and `--announcer-style documentary` changes the host.
+  Without `--showtime` the arena makes no extra calls. You can still talk to any model yourself,
+  and the champion still takes your questions.
+
+Full details are in [The arena](#the-arena-models-compete-openrouter) and [The show](#the-show-announcer-pictures-interviews) below.
 
 ## Bring your own copy: no BBC files or keys in this repo
 
@@ -227,8 +241,10 @@ Zook Entries/<model>/Videos/Test 03 - <challenge> - <contest> - <Zook> vs <oppon
                          .../Knockout Final game 1 - ... vs <opponent> (<its model>) - seed N.mp4
                                                               every game it played (+ _stills.png, .json)
 Zook Entries/<model>/Presentation - <challenge>.txt           its presentation, with result, runs and cost
-Renders/Tournament/..., Renders/<name>/...                    knockout games; runs from the tools/ scripts
+Renders/Tournament/..., Renders/<name>/...                    knockout games (+ the highlights reel); runs from tools/
 Transcripts/<model>/<timestamp>.md (+ .mcp.log)              arena conversations (+ the MCP server's own log)
+Transcripts/Announcer/<timestamp>.md                          everything the announcer said in a session
+Hall of Fame.jsonl                                            knockout champions you chose to keep (across sessions)
 Archive/<date_time>/Zook Entries/...                          earlier arena runs' entries (moved at start)
 Sessions/<date_time>.txt                                      the /end table of each session
 ```
@@ -258,6 +274,9 @@ At the `you>` prompt:
 | `/challenger <id>` | call any OpenRouter model, e.g. `/challenger x-ai/grok-4` |
 | `/leaderboard` | best submission per entrant in this challenge |
 | `/contest` | knockout tournament between this session's qualified Zooks (see below) |
+| `/pick <name>` | before a knockout match: predict the winner |
+| `/exhibition <a> <b>` | one match between any two Zooks submitted this session (doesn't change the ranking) |
+| `/halloffame` | the champions you added after a knockout (`y` at its prompt), across sessions |
 | `/status` | the current challenger's budget and submissions |
 | `/open` | open its latest video and stills |
 | `/end` | finish with the session table (also saved to `Sessions/<date_time>.txt`), then Enter quits; works while a model is working too |
@@ -284,14 +303,82 @@ in the session, whether or not the queue is finished. It plays a knockout betwee
 submitted Zooks of every model that has qualified so far, using the challenge's contest and time
 limit. Each match is announced as `model (Zook) v model (Zook)`. A drawn game is replayed with
 sides swapped and a new seed, up to three games, and is then settled by a coin toss. A game the
-engine fails to finish is played once more, then counts as a draw. Before each match both models
-say one line to the audience (a comment, trash talk or a boast about their Zook), and the second
-one hears the first. You can answer before the game and again after it: `/<name> <message>` talks
+engine fails to finish is played once more, then counts as a draw. With `--showtime`, before each
+match both models say one line to the audience (a comment, trash talk or a boast about their
+Zook), and the second one hears the first. You can talk to them before the game and again after it
+(with or without `--showtime`): `/<name> <message>` talks
 to one model (its model name, the part after the `/`, or its Zook's name; any part of a name only one of them has will do, e.g. `/nano`),
 plain text goes to both, and Enter plays on. Each game's result (scores, how it was decided,
 finish time, falls) is printed. Winners play winners until one is left. The ranking follows the round each model went
-out in, and the champion gives a short speech and takes questions at the `you>` prompt. Videos
-are saved to `Renders/Tournament/`.
+out in. The champion takes your questions at the `you>` prompt; with `--showtime` it first gives a
+short victory speech. Videos
+are saved to `Renders/Tournament/`, along with a highlights reel of every game, which `/open`
+plays. The reel is made by ffmpeg alone, with no model calls and no tokens:
+- each game starts with a 3 s title card: the round and game, then each Zook's name in its arena
+  colour (green/red) with its model underneath;
+- a caption bar names both Zooks while the game plays;
+- it ends on a champion card;
+- **music** plays under every game and fades out over a second as the game ends; the cards are
+  silent.
+
+The music is in [`Music/`](Music/tracks.toml): original 30 s instrumental clips made with Google's
+Lyria 3 through OpenRouter, so there are no copyright claims. Each track has loop points: whole
+4-bar phrases that stop before any fade at the end of the clip, so the loop is seamless. Which
+track plays:
+1. the challenge's own `music = "<track>"` (`challenges/*.toml`; `"none"` for silence);
+2. else the first track whose `tags` include the challenge's contest (e.g. `"zook sumo"`);
+3. else the track marked `default` (now `synth_funk`).
+
+`python tools/music.py list` shows each challenge's pick. To add a track, drop the MP3 in
+`Music/` and run `python tools/music.py analyse Music/<file>.mp3`, which prints its tempo, fade
+and loop points as an entry for `tracks.toml`. `python tools/music.py loop <track> out.mp3` plays
+a track's loop three times, so you can listen to the seam.
+
+After the knockout the arena asks `Add <model> (<Zook>) to the Hall of Fame? [y/N]`. Only `y`
+records the champion, so test sessions stay out of it. `/halloffame` shows the list.
+
+### The show: announcer, pictures, interviews
+
+Everything in this section that calls a model needs **`--showtime`** (or `[arena] showtime = true`).
+Without it the arena calls the models only for their own challenge, for what you say to them,
+and for the champion's answers to your questions. These work either way, since they use no
+tokens: the tale of the tape on screen, the fact card under each banner, `/pick`, `/exhibition`,
+the highlights reel with music, and the Hall of Fame prompt and `/halloffame`.
+
+- **The announcer** is a second, cheap model with no tools. The default is
+  `anthropic/claude-haiku-5.5`: expressive, it sees images, and costs $0.10 / $0.50 per million
+  tokens, so a whole one-match show costs well under a cent.
+  - It **introduces each challenger** from a fact sheet built from OpenRouter's model list: maker,
+    release month and year (from the dated model slug), home country (a table of labs; unknown labs
+    get none rather than a guess), age, context window, price and description. It is told to stick
+    to those facts. The same facts give a one-line card under each challenger's banner.
+  - It **calls each challenge game** from its stills.
+  - In the knockout it **builds up each match** from both Zooks' pictures, **calls the result** from
+    stills of how the game ended, and **interviews** the winner and then the loser.
+  - It crowns the champion and **signs off** at `/end`.
+  - A returning champion's Hall of Fame record goes into its fact sheet and the final standings.
+- **The champion's victory speech** before it takes questions.
+- **Seeing the opponent.** Before each match a tale of the tape (weight, parts, size, limbs, stride,
+  look) is printed. Each model sees the other's preview pictures, or reads its stats if it can't
+  see images, before it gives its pre-match line.
+- **End-of-game stills.** After each match a 2×2 sheet (Go | 4 s before the end / just before the
+  end | the end) is cut from the deciding game's video into a temporary folder. The announcer and
+  both interviewees see it, so they know what happened. It is deleted after the interviews.
+- **Audience games.** `/pick <name>` before a match: the result tells you whether you called it,
+  and the knockout ends with your score. `/exhibition <a> <b>` plays one match with the whole show
+  between any two submitted Zooks.
+
+| option | |
+|---|---|
+| `--showtime` | turn the show on (`[arena] showtime = true`); the options below need it |
+| `--announcer <model>` | any OpenRouter model (`[arena] announcer`) |
+| `--no-announcer` | the show without an announcer; interviews use stock questions |
+| `--announcer-style <style>` | `ringside` (default), `documentary`, `football`, `noir`, or describe your own: `--announcer-style "a pirate captain who is new to robots"` |
+| `--speak` | read the announcer aloud (Windows speech, macOS `say`, Linux `espeak`; `[arena] speak = true`) |
+| `--voice <name>` | e.g. `"Microsoft Hazel Desktop"` (British) or `"Microsoft Zira Desktop"` |
+
+The announcer's tokens and cost are a row in the `/end` table. Everything it said is kept in
+`Transcripts/Announcer/`.
 
 Defaults can live in `bamzooki.toml`:
 
@@ -301,6 +388,11 @@ challengers = ["anthropic/claude-sonnet-4.5", "openai/gpt-5", "google/gemini-2.5
 challenge = "challenges/short.toml"
 max_turns = 120      # model turns per challenger before the runner stops it
 max_tokens = 4000    # per reply
+showtime = true      # the show: announcer, pre-match lines, interviews, victory speech
+announcer = "anthropic/claude-haiku-5.5"
+announcer_style = "ringside"
+speak = true
+voice = "Microsoft Hazel Desktop"
 ```
 
 **While a game is playing, leave the engine window in front** and don't close it. The game only
@@ -346,6 +438,12 @@ src/bamzooki/
   manual.py     read_manual: the Zook Kit PDF as text
   mcp_server/   MCP server wrapping the studio
   arena.py      OpenRouter arena runner
+  tournament.py the /contest knockout bracket
+  announcer.py  the show's host (introductions, calls, interviews)
+  showtime.py   model fact sheets, Zook cards, end-of-game stills, Hall of Fame, highlights
+  voice.py      --speak: the announcer read aloud by the system's speech engine
+  music.py      the highlights reel's music: tracks, loop points, the track for a challenge
+Music/          match music (Lyria 3 clips) and tracks.toml (loop points, tags, default)
 Model Instructions/  agent prompt, design guide, your manual copy (what models are told)
 challenges/     challenge files (task, budget, evaluation game)
 tools/          arena.py, run_contest.py, replay.py, challenge.py, extract.py, check_assets.py, spikes
