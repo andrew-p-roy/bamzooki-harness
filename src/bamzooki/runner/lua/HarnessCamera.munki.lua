@@ -111,6 +111,13 @@ function MessageSetClock(t)
 	myClock = t
 end
 
+-- Turntable: circle the followed Zook at `degrees` per second (rotates the view offset about the
+-- vertical; Number.sin/cos take degrees).
+function MessageOrbit(degrees)
+	myOrbit = degrees
+	return 1
+end
+
 function SystemCamera(frametime)
 	-- Follow the window's drawable area (it can change if the window is resized).
 	local w, h = Camera.Area()
@@ -118,6 +125,11 @@ function SystemCamera(frametime)
 		myAreaW = w
 		myAreaH = h
 		FitArea(w, h)
+	end
+	if myOrbit ~= nil and myOffset ~= nil and frametime ~= nil then
+		local a = myOrbit * frametime
+		local x, y, z = Vector.GetXYZ(myOffset)
+		myOffset = Vector.New(x * Number.cos(a) - z * Number.sin(a), y, x * Number.sin(a) + z * Number.cos(a))
 	end
 	-- SplitCamera.UpdateView needs a view (SetView); until then (or for stills) leave it alone.
 	if myZook ~= nil and myZook ~= -1 then

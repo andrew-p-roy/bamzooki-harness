@@ -38,7 +38,8 @@ predicts the winner.
 anthropic/claude-haiku-5.5; --no-announcer) introduces each challenger (maker, release month,
 country, trivia) and calls the games (--speak reads it aloud); in the knockout both models see the
 other's Zook and say a line before each match, and afterwards they are interviewed with stills of
-how the game ended; returning champions' Hall of Fame records are mentioned. Its knockout games
+how the game ended; while a model presents its Zook, the Zook stands on a turntable in the engine
+until /next; returning champions' Hall of Fame records are mentioned. Its knockout games
 also play their sound live: a starting beeper on the countdown and the match music looping from Go
 (the game videos and the highlights have it either way).
 
@@ -477,6 +478,7 @@ class Arena:
 
     # --- the agent loop ---
     async def start(self, model: str) -> None:
+        self._showcase_stop()  # /next (or another challenger): the last presentation is over
         info = await self.router.model_info(model)
         if not info:
             say(f"Unknown OpenRouter model {model!r} (check the id at openrouter.ai/models).", "r")
@@ -591,6 +593,7 @@ class Arena:
                     self._speak_as(e.model, text)
             if not calls and text and e.submission and not e.presented:
                 self._save_presentation(e, text)
+                self._showcase_start(e)
             if not calls:
                 passed, stop = self._interjections(e)  # typed while it was answering
                 if passed and not stop:
@@ -702,6 +705,35 @@ class Arena:
             say(piece, "dim" if thinking else "", end="")
         return on_delta
 
+    def _showcase_start(self, e: Entrant) -> None:
+        """With the show: while its maker presents it, the submitted Zook stands on a turntable in the
+        engine (windowed like the games), until /next or anything else that needs the engine."""
+        if not self.show or not e.design:
+            return
+        self._showcase_stop()
+        from .runner import Engine
+        from .sdk.store import Zoo
+
+        try:
+            engine = Engine()
+            zook = Zoo(engine.install, examples_root=engine.root / "Teams" / "examples" / "Creatures").resolve(e.design)
+        except Exception as err:  # no install, or the design can't be found: the show goes on without it
+            say(f"    [no showcase: {err}]", "dim")
+            return
+        cancel = threading.Event()
+        thread = threading.Thread(target=engine.showcase, args=(zook.path, zook.name, cancel), daemon=True,
+                                  kwargs={"position": self.position, "view_fit": self.view_fit,
+                                          "fullscreen": self.fullscreen})
+        thread.start()
+        self._showcase = (thread, cancel)
+
+    def _showcase_stop(self) -> None:
+        if showcase := getattr(self, "_showcase", None):
+            thread, cancel = showcase
+            cancel.set()
+            thread.join(timeout=15)
+            self._showcase = None
+
     def _save_presentation(self, e: Entrant, text: str) -> None:
         """Zook Entries/<model>/Presentation - <challenge>.txt: the model's presentation of its
         challenger, under a header with the facts (design, result, runs, cost; no video links)."""
@@ -797,6 +829,7 @@ class Arena:
         """Knockout between the Zooks that won their challenge game this session, then the
         winner's speech; the audience's next messages go to the winner. exhibition: one match
         between the two given seats, without the speech or a ranking."""
+        self._showcase_stop()
         if seats is None:
             seats = [tournament.Seat(e.model, e.design) for e in self.entrants.values() if e.qualified and e.design]
         if len(seats) < 2:
@@ -1140,6 +1173,7 @@ class Arena:
         if self.auto:
             while self.queue:
                 await self._safely(self.start(self.queue.pop(0)))
+            self._showcase_stop()
             self.leaderboard()
             await self._disconnect()
             await self.sign_off()
@@ -1199,6 +1233,7 @@ class Arena:
                 if self.skip and self.queue:  # /next typed while it answered
                     await self.call(self.queue.pop(0))
                 self.skip = False
+        self._showcase_stop()
         await self._disconnect()
         if self.ending:
             await self.sign_off()

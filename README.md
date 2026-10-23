@@ -71,6 +71,8 @@ Tips:
     challenger with its maker, release month and year, country and some trivia, then calls the games;
   - in the knockout the models **see each other's Zooks** and trade a line before each match, and
     afterwards they're interviewed with stills of how the game ended;
+  - while each model presents its Zook, the Zook stands on a **turntable** in the engine (shown
+    like the games: its own window, `--monitor` or `--full-screen`) until `/next`;
   - the champion gives a victory speech;
   - knockout games play their **sound** live (Windows): a starting beeper on the countdown and the
     match music looping under the game from Go (the videos and highlights have it either way).

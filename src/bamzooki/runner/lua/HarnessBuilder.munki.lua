@@ -17,6 +17,12 @@ function EnsureIK(node)
 end
 
 -- Every argument must be passed (Munki drops messages with missing arguments).
+-- The loaded Zook's bounding box as one table (a message returns one value to another agent).
+function MessageHarnessBox()
+	local minx, miny, minz, maxx, maxy, maxz = MessageBoundingBox()
+	return { minx = minx, miny = miny, minz = minz, maxx = maxx, maxy = maxy, maxz = maxz }
+end
+
 function MessageHarnessFinalize(draft, out, textureDir, zookName)
 	local invalid = MessageLoad(draft, textureDir, zookName, 0)
 	EnsureIK(myRootNode)

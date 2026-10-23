@@ -659,3 +659,43 @@ def test_challenger_header_names_the_game_and_map(monkeypatch):
     monkeypatch.setattr(install.Install, "discover", staticmethod(no_install))
     assert a._game_and_map() == "  |  game: Zook Sumo"
     assert arena._spaced("TableSumo") == "Table Sumo"
+
+
+def test_showcase_runs_during_the_presentation_until_stopped(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from bamzooki import arena, runner
+    from bamzooki.sdk import store
+
+    started, stopped = threading.Event(), threading.Event()
+
+    class FakeEngine:
+        install, root = None, arena.Path(".")
+
+        def showcase(self, path, name, cancel, **kw):
+            started.set()
+            self.kw = kw
+            cancel.wait(5)
+            stopped.set()
+
+    class FakeZoo:
+        def __init__(self, *a, **k):
+            pass
+
+        def resolve(self, ref):
+            return SimpleNamespace(path=arena.Path("z.zook"), name="Crusher")
+
+    monkeypatch.setattr(runner, "Engine", FakeEngine)
+    monkeypatch.setattr(store, "Zoo", FakeZoo)
+    a = arena.Arena.__new__(arena.Arena)
+    a.show, a.position, a.view_fit, a.fullscreen = False, "right-half", (4 / 3, 944), False
+    e = SimpleNamespace(design="lab_model/Crusher@2")
+    a._showcase_start(e)
+    assert not started.is_set()  # only with the show
+    a._showcase_stop()  # nothing running: fine
+    a.show = True
+    a._showcase_start(e)
+    assert started.wait(2) and not stopped.is_set()
+    a._showcase_stop()  # /next
+    assert stopped.is_set() and a._showcase is None

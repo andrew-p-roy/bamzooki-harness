@@ -448,6 +448,34 @@ class Engine:
         return sorted(p.name for p in d.iterdir() if p.is_dir() and p.name.endswith("Env") and p.name != "Env") \
             if d.is_dir() else []
 
+    # --- showcase (the arena's presentations) ---------------------------------------
+    def showcase(self, zook: Path, name: str, cancel: threading.Event, window: tuple[int, int] | None = None,
+                 position: str = "none", view_fit: tuple[float, int] | None = None, fullscreen: bool = False,
+                 orbit: float = 15.0, max_time: float = 900.0, env: str = "BoxEnv") -> str:
+        """Show a Zook standing still on a free-play floor, the camera circling it (`orbit` degrees a
+        second) like a turntable, until `cancel` is set (or max_time real seconds). Windowing as in
+        Job. Returns how it ended ("stopped", "exited", ...)."""
+        self.prepare()
+        self.write_video_cfg(window, fullscreen)
+        client = FULL_SCREEN_MODE if fullscreen else window or DEFAULT_CLIENT
+        run_dir = self.runs / f"{time.strftime('%Y%m%d-%H%M%S')}-showcase"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        spec = {
+            "driver": "HarnessShowcase", "classes": {1: "HarnessShowcase", 2: "HarnessCurtain"}, "camera": 3,
+            "curtain": 1, "fullscreen": 1 if fullscreen else 0,
+            "zook": _posix(zook), "name": name, "env": env, "texture_dir": _posix(self.root / "NewTeam" / "Textures"),
+            "window_w": client[0], "window_h": client[1], "view_fit": _fit_spec(view_fit),
+            "orbit": orbit, "angle": 35, "max_time": max_time,
+            "window_title": f"BAMZOOKi harness - {name}",
+            "log": _posix(run_dir / "showcase_log.txt"), "boot_log": _posix(run_dir / "boot_log.txt"),
+        }
+        (run_dir / "job.dat").write_text(table.dumps(spec), encoding="latin-1")
+        args = ["-init", BOOT_NAME, "-videocfg", VIDEO_CFG,
+                "-script", _posix(LUA_DIR / "boot.lua"), "-job", _posix(run_dir / "job.dat")]
+        status, _, _ = self._launch(args, max_time + 60, "idle", None if fullscreen else window,
+                                    "none" if fullscreen else position, cancel=cancel)
+        return status
+
     # --- replays -------------------------------------------------------------------
     def render_replay(self, replay: Path, video: bool = True, fps: float = 25.0, speed: float = 2.0,
                       view: str | dict | None = None, window: tuple[int, int] | None = None,
@@ -504,9 +532,11 @@ class Engine:
 
     def _launch(self, args: list[str], timeout: float, focus: str,
                 size: tuple[int, int] | None = None, position: str = "none",
-                after_go: tuple[Path, float] | None = None) -> tuple[str, str | None, float]:
+                after_go: tuple[Path, float] | None = None,
+                cancel: threading.Event | None = None) -> tuple[str, str | None, float]:
         """Run the engine until it exits. Killed after `timeout` real seconds ("timeout"), or,
-        with after_go = (driver log, seconds), that long after the log reports Go ("time_limit")."""
+        with after_go = (driver log, seconds), that long after the log reports Go ("time_limit"),
+        or when `cancel` is set ("stopped")."""
         log = Path(os.environ.get("APPDATA", "")) / "BonsaiErrorLog.txt"
         log_mtime = log.stat().st_mtime if log.exists() else None
         cmd = self.install.config.wine_command + [str(self.root / ENGINE_EXE)] + args
@@ -560,7 +590,9 @@ class Engine:
             now = time.time()
             if after_go and go_at is None and _logged_go(after_go[0]):
                 go_at = now
-            if go_at is not None and now - go_at > after_go[1]:
+            if cancel is not None and cancel.is_set():
+                status = "stopped"
+            elif go_at is not None and now - go_at > after_go[1]:
                 status = "time_limit"
             elif now - t0 > timeout:
                 status = "timeout"
