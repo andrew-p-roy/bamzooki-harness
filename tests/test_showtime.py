@@ -255,3 +255,16 @@ def test_reel_without_a_font_is_just_joined(tmp_path):
     assert showtime.titled_reel([g], tmp_path / "x.mp4", font=tmp_path / "none.ttf") is None
     out = showtime.join_videos([g.video, g.video], tmp_path / "plain.mp4")
     assert abs(video_duration(out) - 4) < 0.3
+
+
+def test_voice_wait_idle_returns_when_nothing_is_queued(monkeypatch):
+    import time
+
+    from bamzooki import voice
+
+    monkeypatch.setattr(voice, "speech_command", lambda *a, **k: None)
+    monkeypatch.setattr(voice, "kokoro_installed", lambda: False)
+    v = voice.Voice()
+    t = time.time()
+    v.wait_idle(timeout=5)
+    assert v.idle() and time.time() - t < 2

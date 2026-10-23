@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.request
 import wave
 from pathlib import Path
@@ -162,6 +163,8 @@ class Voice:
     def __init__(self, voice: str | None = None, rate: int = 1, cache: Path | None = None,
                  speed: float = KOKORO_SPEED):
         self.lines: queue.Queue[tuple[str, str | None]] = queue.Queue()  # (text, Kokoro voice or None)
+        self._working = 0  # threads synthesising or playing right now (see idle)
+        self._lock = threading.Lock()
         self.kokoro = kokoro_installed() and cache is not None and (voice is None or bool(KOKORO_VOICE.match(voice)))
         self.command = None if self.kokoro else speech_command(voice, rate)
         self.name = (voice or KOKORO_DEFAULT) if self.kokoro else voice
@@ -182,6 +185,21 @@ class Voice:
         if self.available and (text := speakable(text)):
             self.lines.put((text, voice))
 
+    def _count(self, step: int) -> None:
+        with self._lock:
+            self._working += step
+
+    def idle(self) -> bool:
+        """Nothing queued, being synthesised or playing."""
+        return self.lines.empty() and (not self.kokoro or self.audio.empty()) and not self._working
+
+    def wait_idle(self, timeout: float = 600.0) -> None:
+        """Block until the voice has said everything queued (idle for half a second), or `timeout`."""
+        end, calm = time.time() + timeout, 0
+        while time.time() < end and calm < 3:
+            calm = calm + 1 if self.idle() else 0
+            time.sleep(0.2)
+
     def say_now(self, text: str) -> None:
         """Live commentary: drop whatever hasn't been spoken yet (the line playing finishes), then say this."""
         for q in (self.lines, getattr(self, "audio", None)):
@@ -195,11 +213,14 @@ class Voice:
     def _run(self) -> None:
         while True:
             text, _ = self.lines.get()  # the system engine has the one voice
+            self._count(1)
             try:
                 subprocess.run(self.command, input=text.encode("utf-8"), capture_output=True, timeout=180,
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             except (OSError, subprocess.SubprocessError):
                 pass
+            finally:
+                self._count(-1)
 
     def _synthesise(self) -> None:
         from kokoro_onnx import Kokoro
@@ -210,6 +231,7 @@ class Voice:
             return
         while True:
             text, voice = self.lines.get()
+            self._count(1)
             name = voice or self.name
             lang = "en-gb" if name[0] == "b" else "en-us"
             for piece in sentences(text):
@@ -218,7 +240,13 @@ class Voice:
                 except Exception:
                     continue
                 self.audio.put(wav_bytes(samples, rate))
+            self._count(-1)
 
     def _play(self) -> None:
         while True:
-            play_wav(self.audio.get())
+            data = self.audio.get()
+            self._count(1)
+            try:
+                play_wav(data)
+            finally:
+                self._count(-1)

@@ -270,10 +270,15 @@ challenger Zook, its design and its testing strategy, and then **you can talk to
 # put OPENROUTER_API_KEY=... in .env (gitignored) or the environment
 python tools/arena.py --challenger anthropic/claude-sonnet-4.5 --challenger openai/gpt-5
 python tools/arena.py --challenge challenges/short.toml           # quick 3-run sessions
-python tools/arena.py --auto --challenger google/gemini-2.5-flash # unattended, then leaderboard
+python tools/arena.py --auto --showtime --speak                  # the whole show, unattended
 python tools/arena.py --monitor                                   # one screen: games on the right
 python tools/arena.py --full-screen                               # games in 4:3 full screen
 ```
+
+**Unattended (`--auto`).** The whole show runs start to finish with no `/next` or Enter: every
+queued challenger in turn (each presentation, and its turntable, plays out before the next), then
+the knockout if two qualify (every game in a row, Hall of Fame yes), the champion's speech and
+the session table. With `--speak` it waits for the voice before moving on, so nothing is cut off.
 
 **Full screen (`--full-screen`).** Test and tournament games switch the display to 1024×768 (4:3)
 and run full screen; your graphics card or monitor scales that up to fill the screen, whatever its

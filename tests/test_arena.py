@@ -699,3 +699,21 @@ def test_showcase_runs_during_the_presentation_until_stopped(monkeypatch):
     assert started.wait(2) and not stopped.is_set()
     a._showcase_stop()  # /next
     assert stopped.is_set() and a._showcase is None
+
+
+def test_auto_answers_the_shows_questions_itself():
+    import asyncio
+
+    from bamzooki import arena
+
+    a = arena.Arena.__new__(arena.Arena)
+    a.auto, a.keyboard, a.voice = True, None, None
+
+    async def no_pause(extra=0.0):
+        pass
+
+    a._settle = no_pause
+    assert asyncio.run(a.confirm("Run the knockout contest now? [Y/N] ")) is True
+    asyncio.run(a.match_talk([], "between games", "to go on"))  # returns without waiting for Enter
+    a.auto = False
+    assert asyncio.run(a.confirm("Add it to the Hall of Fame? [y/N] ")) is False  # no keyboard: no

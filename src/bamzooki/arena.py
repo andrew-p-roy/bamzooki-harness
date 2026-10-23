@@ -984,7 +984,8 @@ class Arena:
         self._log("runner", prompt)
         if self.show:
             await self.converse()
-        say("\n(Questions for the champion: just type them. /next or /challenger carries on.)", "dim")
+        if not getattr(self, "auto", False):
+            say("\n(Questions for the champion: just type them. /next or /challenger carries on.)", "dim")
 
     async def preview_match(self, contest: str, round_name: str, a: tournament.Seat, b: tournament.Seat,
                             card_a: showtime.ZookCard, card_b: showtime.ZookCard, folder: Path) -> None:
@@ -1090,7 +1091,10 @@ class Arena:
                          pick: dict | None = None) -> None:
         """Between games: '/<name> message' to one contestant, plain text to both, Enter to go on.
         Lines typed while a game played are taken first. With `pick` (before a match), '/pick <name>'
-        predicts the winner: pick["seat"] is set."""
+        predicts the winner: pick["seat"] is set. --auto: no talk, the show goes on once the voice is done."""
+        if getattr(self, "auto", False):
+            await self._settle(2)
+            return
         if not self.keyboard:
             return
         pending = self.keyboard.drain()
@@ -1131,13 +1135,23 @@ class Arena:
 
     async def confirm(self, question: str) -> bool:
         """A yes/no question at the keyboard; only 'y' or 'yes' is yes (Enter, anything else, or no
-        keyboard is no). Lines typed earlier are cleared first, so they can't answer it."""
+        keyboard is no). Lines typed earlier are cleared first, so they can't answer it. --auto: yes."""
+        if getattr(self, "auto", False):
+            say(question + "y (--auto)", "b")
+            return True
         if not self.keyboard:
             return False
         self.keyboard.drain()
         say(question, "b", end="")
         answer = await asyncio.to_thread(self.keyboard.get)
         return (answer or "").strip().lower() in ("y", "yes")
+
+    async def _settle(self, extra: float = 0.0) -> None:
+        """--auto pacing: wait until the voice has said everything queued (so nothing is cut off or
+        talked over), then `extra` seconds more."""
+        if getattr(self, "voice", None):
+            await asyncio.to_thread(self.voice.wait_idle)
+        await asyncio.sleep(extra)
 
     async def offer_contest(self) -> None:
         """When the queue has run out, ask whether to play the knockout now."""
@@ -1170,13 +1184,17 @@ class Arena:
         say("You can type while a model works: it gets your message after its current step (/stop halts it).",
             "dim")
         self.keyboard = Keyboard()
-        if self.auto:
+        if self.auto:  # the whole show, unattended: every challenger, the knockout, the champion, the table
             while self.queue:
                 await self._safely(self.start(self.queue.pop(0)))
+                await self._settle(10 if self.show and not self.voice else 4)  # the presentation plays out
             self._showcase_stop()
             self.leaderboard()
+            await self._safely(self.offer_contest())
+            await self._settle(3)
             await self._disconnect()
             await self.sign_off()
+            await self._settle()
             self.summary()
             return
         while not self.ending:
@@ -1503,7 +1521,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--max-turns", type=int, default=int(a_cfg.get("max_turns", 120)))
     ap.add_argument("--max-tokens", type=int, default=int(a_cfg.get("max_tokens", 4000)))
     ap.add_argument("--temperature", type=float, default=a_cfg.get("temperature"))
-    ap.add_argument("--auto", action="store_true", help="run every queued challenger without the prompt, then show the leaderboard")
+    ap.add_argument("--auto", action="store_true",
+                    help="the whole show unattended: every queued challenger in turn, then the knockout (when two "
+                         "qualify), the champion and the session table; no /next or Enter needed")
     ap.add_argument("--keep-entries", action="store_true",
                     help="carry on with the previous Zook Entries (default: move them to Archive/<date_time>/ "
                          "so every model starts afresh)")
