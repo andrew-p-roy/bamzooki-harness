@@ -26,6 +26,10 @@ function MessageHarnessStart(job)
 	Visual.SetLightTransform(Segment.directional, trans)
 	myCamera = Agent.Create("HarnessCamera", 0, 0, job.shot_w, job.shot_h)
 	World.CloseAccess()
+	if job.curtain_agent ~= nil then
+		-- Black only while loading: from here the window shows each Zook as it is photographed.
+		Agent.SendMessage("Destroy", job.curtain_agent)
+	end
 	myTask = 0
 	-- Give the camera a frame to exist before the first snapshot.
 	Agent.PostMessage("NextTask", Agent.Me(), 0.2)

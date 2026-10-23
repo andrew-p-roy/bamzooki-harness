@@ -344,7 +344,8 @@ class Engine:
             spec_tasks[i] = {"draft": _posix(t["draft"]), "out": _posix(t["out"]), "name": t["name"],
                              "owner": t.get("owner", "bamzooki-harness"), "shots": shots or None}
         spec = {
-            "driver": "HarnessWorkshop", "classes": {1: "HarnessWorkshop"}, "camera": 3,
+            "driver": "HarnessWorkshop", "classes": {1: "HarnessWorkshop", 2: "HarnessCurtain"}, "curtain": 1,
+            "camera": 3,
             "tasks": spec_tasks, "texture_dir": _posix(self.root / "NewTeam" / "Textures"),
             "shot_w": shot_size[0], "shot_h": shot_size[1], "shot_angle": shot_angle,
             "window_title": "BAMZOOKi harness - workshop",
