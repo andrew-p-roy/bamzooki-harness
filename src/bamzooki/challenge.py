@@ -8,7 +8,8 @@ A challenge is a TOML file (see challenges/default.toml):
     music = "synth_funk"             # optional: the highlights reel's track (Music/tracks.toml; "none" = silent)
     [budget]
     runs = 20                        # test runs (one game each) the model may use (0 = unlimited)
-    counts = ["run_contest", "run_trial"]
+    counts = ["run_contest"]         # tools that use a run
+    trials = 5                       # run_trial games allowed besides the runs (0 = unlimited)
     submissions = 1                  # how many times submit_design may be called
     [scoring]
     draw = 0.5                       # points for a draw (win = 1, loss = 0)
@@ -60,7 +61,8 @@ class Challenge:
     description: str
     evaluation: Match
     runs: int = 20
-    counts: tuple[str, ...] = ("run_contest", "run_trial")
+    counts: tuple[str, ...] = ("run_contest",)  # tools that use a run
+    trials: int = 0  # run_trial games allowed besides the runs, when it isn't counted as one (0 = unlimited)
     submissions: int = 1
     draw_points: float = 0.0  # a draw (no winner, e.g. time limit) counts this much of a win
     time_limit: float = 120.0  # seconds of play after Go in every contest (tests and evaluation)
@@ -87,7 +89,8 @@ class Challenge:
         return cls(name=raw.get("name", path.stem), title=raw.get("title", path.stem),
                    description=raw.get("description", "").strip(), evaluation=match,
                    runs=int(budget.get("runs", 20)),
-                   counts=tuple(budget.get("counts", ("run_contest", "run_trial"))),
+                   counts=tuple(budget.get("counts", ("run_contest",))),
+                   trials=int(budget.get("trials", 0)),
                    submissions=int(budget.get("submissions", 1)),
                    draw_points=float(raw.get("scoring", {}).get("draw", 0.0)),
                    time_limit=float(raw.get("scoring", {}).get("time_limit", 120.0)),
@@ -99,7 +102,12 @@ class Challenge:
                 "scoring": {"win": 1, "draw": self.draw_points, "loss": 0},
                 "time_limit_s": self.time_limit,
                 "budget": {"runs": self.runs or "unlimited", "counted_tools": list(self.counts),
-                           "each_run_is": "one game: a trial, or one contest between two Zooks you choose",
+                           "each_run_is": ("one game: a trial, or one contest between two Zooks you choose"
+                                           if "run_trial" in self.counts else
+                                           "one contest between two Zooks you choose"),
+                           **({} if "run_trial" in self.counts else
+                              {"trials": self.trials or "unlimited",
+                               "trials_are": "run_trial games, separate from the runs: they don't use a run"}),
                            "submissions": self.submissions}}
 
 
@@ -109,7 +117,7 @@ class ChallengeState:
     def __init__(self, challenge: Challenge, model_dir: Path):
         self.challenge = challenge
         self.path = model_dir / f"challenge-{challenge.name}.json"
-        self.data = {"challenge": challenge.name, "runs_used": 0, "log": [], "submissions": []}
+        self.data = {"challenge": challenge.name, "runs_used": 0, "trials_used": 0, "log": [], "submissions": []}
         if self.path.exists():
             self.data.update(json.loads(self.path.read_text(encoding="utf-8")))
 
@@ -125,19 +133,36 @@ class ChallengeState:
     def runs_left(self) -> int | None:
         return None if not self.challenge.runs else max(0, self.challenge.runs - self.runs_used)
 
+    @property
+    def trials_used(self) -> int:
+        return self.data.get("trials_used", 0)
+
+    @property
+    def trials_left(self) -> int | None:
+        return None if not self.challenge.trials else max(0, self.challenge.trials - self.trials_used)
+
     def counts(self, tool: str) -> bool:
         return tool in self.challenge.counts
+
+    def is_trial(self, tool: str) -> bool:
+        """A trial on its own allowance (not counted as a run)."""
+        return tool == "run_trial" and not self.counts(tool)
 
     def check(self, tool: str) -> str | None:
         """Why this run may not happen, or None."""
         if self.counts(tool) and self.runs_left == 0:
             return (f"No test runs left: all {self.challenge.runs} are used. "
                     "Submit your best design with submit_design.")
+        if self.is_trial(tool) and self.trials_left == 0:
+            return (f"No trials left: all {self.challenge.trials} are used. Test with run_contest (it uses a "
+                    "test run) or submit your best design with submit_design.")
         return None
 
     def spend(self, tool: str, detail: str) -> None:
         if self.counts(tool):
             self.data["runs_used"] += 1
+        elif self.is_trial(tool):
+            self.data["trials_used"] = self.trials_used + 1
         self.data["log"].append({"tool": tool, "detail": detail, "time": time.strftime("%Y-%m-%d %H:%M:%S")})
         self.save()
 
@@ -146,9 +171,17 @@ class ChallengeState:
         out = {"runs_used": self.runs_used, "runs_left": "unlimited" if left is None else left,
                "runs_total": self.challenge.runs or "unlimited",
                "submissions_left": max(0, self.challenge.submissions - len(self.data["submissions"]))}
+        reminders = []
         if left is not None:
-            out["reminder"] = (f"{left} of {self.challenge.runs} test runs left." if left else
-                               "No test runs left. Submit your best design with submit_design.")
+            reminders.append(f"{left} of {self.challenge.runs} test runs left." if left else
+                             "No test runs left. Submit your best design with submit_design.")
+        if "run_trial" not in self.challenge.counts:
+            trials = self.trials_left
+            out["trials_used"], out["trials_left"] = self.trials_used, "unlimited" if trials is None else trials
+            if trials is not None:
+                reminders.append(f"{trials} of {self.challenge.trials} trials left." if trials else "No trials left.")
+        if reminders:
+            out["reminder"] = " ".join(reminders)
         return out
 
     def can_submit(self) -> str | None:
@@ -161,5 +194,5 @@ class ChallengeState:
         self.save()
 
     def reset(self) -> None:
-        self.data = {"challenge": self.challenge.name, "runs_used": 0, "log": [], "submissions": []}
+        self.data = {"challenge": self.challenge.name, "runs_used": 0, "trials_used": 0, "log": [], "submissions": []}
         self.save()

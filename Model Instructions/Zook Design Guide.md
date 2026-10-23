@@ -200,11 +200,13 @@ The Zook Kit's UI doesn't offer this, but the engine supports it (Series-1 Zooks
 
 ## 9. Testing strategy: you choose every game
 
-Test runs are **budgeted** (see `get_challenge`, usually 20), and every result tells you how
-many are left. **Each run is exactly one game, and you decide which game it is** through the
-tool's arguments. Picking the games that teach you the most is part of the challenge.
+**Contests use test runs; trials have their own, larger allowance.** `get_challenge` shows your
+test runs (usually 20), your trials (usually 50) and which tools use runs (`counted_tools`): in
+the standard challenges only `run_contest` does. Every result tells you how many are left. **Each game is exactly one game, and
+you decide which** through the tool's arguments. Picking the games that teach you the most is
+part of the challenge.
 
-| Tool | One run = | You choose |
+| Tool | One game = | You choose |
 |---|---|---|
 | `run_trial(ref, trial)` | one Zook Kit trial for one Zook | which Zook (`ref`), which trial: `sprint`, `hurdles`, `lap`, `block_push`, `high_jump`, or `free:<Env>` with a `duration` |
 | `run_contest(contest, green, red, seed)` | one contest between two Zooks | which contest, which Zook plays green and which plays red, and the `seed` |
@@ -222,19 +224,21 @@ tool's arguments. Picking the games that teach you the most is part of the chall
   change is an improvement.
 - **Seeds:** the same seed gives exactly the same game. Re-running the same game with the same
   seed teaches you nothing; change the seed to check that a result wasn't luck.
-- **Free (no run used):** `save_zook`, `edit_zook`, `preview_zook`, `get_zook`,
-  `validate_zook`, and all the reference tools. Look at the pictures before spending a run.
+- **Free (no run used):** `save_zook`, `edit_zook`, `preview_zook`, `get_zook`, `validate_zook`,
+  and all the reference tools. `run_trial` doesn't use a run either, but trials are limited
+  (their own allowance). Look at the pictures, and trial your designs, before spending a contest.
 - **Colours:** in contests "green" and "red" are just the two arena sides. The final evaluation
   game in `get_challenge` says which side your submitted Zook plays, so test on that side.
 
-A sensible plan for a 20-run budget:
+A sensible plan:
 1. Design, `save_zook` and check the pictures (free). Is it standing on its legs, with the legs
    pointing down?
-2. `run_trial` sprint (1 run): does it walk forwards, how fast, does it drift or fall? If it goes
+2. `run_trial` sprint (a trial): does it walk forwards, how fast, does it drift or fall? If it goes
    backwards, fix the stride path (section 6) and re-test.
-3. A trial that matches the challenge (e.g. `block_push` for pushing contests, `hurdles` for
-   obstacles).
-4. `run_contest` against the opponent you must beat, on your evaluation side. If you
+3. Trials that match the challenge: e.g. `block_push` or `free:StrongEnv` for pushing
+   contests, `hurdles` for obstacles. Try several clearly different configurations (body plan,
+   leg count and placement, gait settings), compare their trial numbers, and refine the best.
+4. `run_contest` (uses a run) against the opponent you must beat, on your evaluation side. If you
    lose, read the stats and stills (did you fall off, get pushed, walk the wrong way?), change
    one thing with `edit_zook`, and play the next game: against the target again, or new version
    against old.

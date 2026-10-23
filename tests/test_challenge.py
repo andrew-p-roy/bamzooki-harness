@@ -31,7 +31,7 @@ def challenge(tmp_path):
 
 def test_default_challenge_loads():
     c = Challenge.load()
-    assert c.runs == 20 and c.submissions == 1 and set(c.counts) == {"run_contest", "run_trial"}
+    assert c.runs == 20 and c.submissions == 1 and set(c.counts) == {"run_contest"}
     assert (c.evaluation.contest, c.evaluation.opponent, c.evaluation.seed) == ("Zook Sumo", "Spider", 7)
     assert c.time_limit == 120 and c.describe()["time_limit_s"] == 120
     shown = c.describe()["evaluation_game"]
@@ -49,8 +49,9 @@ def test_evaluation_is_one_game(challenge, tmp_path):
 
 def test_budget_counts_and_persists(challenge, tmp_path):
     st = ChallengeState(challenge, tmp_path / "m")
-    assert st.budget()["runs_left"] == 2 and st.check("run_trial") is None
-    st.spend("run_trial", "a")
+    assert st.budget()["runs_left"] == 2 and st.check("run_contest") is None
+    st.spend("run_contest", "a")
+    st.spend("run_trial", "free: not counted")
     st.spend("save_zook", "not counted")
     assert ChallengeState(challenge, tmp_path / "m").runs_used == 1  # reloaded from disk
     st.spend("run_contest", "b")
@@ -130,3 +131,31 @@ def test_videos_go_to_the_entrant_folder_with_test_numbers(tmp_path, challenge):
     assert _short(s._ref("Bot")) == "Bot@1" and _short(s._ref("Ant")) == "Ant"
     s.challenge = s.state = None
     assert s._test_label() == "Run"
+
+
+def test_trials_have_their_own_allowance(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text(TOML.replace("runs = 2", "runs = 2\ntrials = 2"))
+    c = Challenge.load(p)
+    assert c.trials == 2 and c.describe()["budget"]["trials"] == 2
+    st = ChallengeState(c, tmp_path / "m")
+    st.spend("run_trial", "sprint")
+    assert st.runs_left == 2 and st.trials_left == 1  # a trial doesn't use a run
+    assert st.budget()["reminder"] == "2 of 2 test runs left. 1 of 2 trials left."
+    st.spend("run_trial", "block_push")
+    assert "No trials left" in st.check("run_trial") and st.check("run_contest") is None
+    assert ChallengeState(c, tmp_path / "m").trials_used == 2  # reloaded from disk
+
+
+def test_old_progress_files_have_no_trial_count(tmp_path, challenge):
+    (tmp_path / "m").mkdir()
+    (tmp_path / "m" / "challenge-t.json").write_text('{"challenge": "t", "runs_used": 1, "log": [], "submissions": []}')
+    st = ChallengeState(challenge, tmp_path / "m")
+    assert st.trials_used == 0 and st.trials_left is None and st.budget()["trials_left"] == "unlimited"
+
+
+def test_standard_challenges_allow_5_and_50_trials():
+    from bamzooki.config import REPO_ROOT
+
+    assert Challenge.load(REPO_ROOT / "challenges" / "short.toml").trials == 5
+    assert Challenge.load().trials == 50

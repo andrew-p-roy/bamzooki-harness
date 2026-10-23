@@ -55,8 +55,8 @@ calling, from [openrouter.ai/models](https://openrouter.ai/models)):
 Tips:
 - **Leave the BAMZOOKi window in front while a game plays, and don't close it.** The game only runs
   while its window has focus.
-- The default challenge is "Beat Spider at Sumo" with 20 test runs. For a quick show, add
-  `--challenge challenges/short.toml` (3 runs).
+- The default challenge is "Beat Spider at Sumo" with 20 test runs (contests) and 50 trials. For a
+  quick show, add `--challenge challenges/short.toml` (3 runs, 5 trials).
 - To skip typing the models, list them in `bamzooki.toml`:
   `[arena]` → `challengers = ["anthropic/claude-sonnet-4.5", "openai/gpt-5"]`, then run
   `tools\arena.py` and use `/next`.
@@ -207,10 +207,12 @@ evaluation game** that `submit_design` plays (contest, opponent, seed, side; out
 win 1, draw 0.5, loss 0). The evaluation seed is **secret** by default (`reveal_seed = false`):
 games are deterministic, so a model that knows the seed can simply rehearse the evaluation game.
 `challenges/short.toml` is the same task with 3 runs. Every contest in a challenge stops after
-`time_limit` seconds of play after Go, in real time (default 120, in `[scoring]`); no winner by then is a draw and the game is stopped. **Every test run is a single game that the model chooses** through the
-tool arguments: a trial for one of its Zooks, or one contest with the two Zooks and the seed it
-picks. Which games to spend runs on is its testing strategy. Every run result reminds the model
-how many runs are left. In its tests a model can only use the example Zooks
+`time_limit` seconds of play after Go, in real time (default 120, in `[scoring]`); no winner by then is a draw and the game is stopped. **Every game is one the model chooses** through the tool
+arguments: a trial for one of its Zooks, or one contest with the two Zooks and the seed it picks.
+Trials don't use test runs; they have their own allowance (`trials` in `[budget]`; only
+`run_contest` is in `counts`), so models are encouraged to compare different designs on them.
+Contests use the test runs, and which ones to play is its testing strategy. Every result reminds
+the model how many runs and trials are left. In its tests a model can only use the example Zooks
 and its own designs; other models' designs are hidden and can't be referenced. Progress is kept
 per model in `<arena_dir>/Zook Entries/<model>/challenge-<name>.json`:
 
