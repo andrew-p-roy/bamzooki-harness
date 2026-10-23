@@ -175,12 +175,22 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--http", action="store_true", help="serve MCP over HTTP (streamable-http) instead of stdio")
     ap.add_argument("--host", default="127.0.0.1", help="HTTP bind address (keep it local)")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--position", choices=["right", "left", "center", "right-half", "left-half", "none"],
+                    default="none",
+                    help="move the engine window for test games (run_contest, run_trial); default: where it opens")
+    ap.add_argument("--view-fit", metavar="ASPECT,MAXW",
+                    help="test games keep the picture at this aspect and width cap, centred in the window "
+                         "(e.g. 1.3333,944; default: the picture fills the window)")
+    ap.add_argument("--full-screen", action="store_true",
+                    help="test games run in 4:3 full screen, scaled up to fill the display")
     a = ap.parse_args(argv)
+    view_fit = (float(a.view_fit.split(",")[0]), int(a.view_fit.split(",")[1])) if a.view_fit else None
     from ..challenge import Challenge
     from ..config import load_config
 
     challenge = None if a.no_challenge else Challenge.load(a.challenge or load_config().challenge)
-    server = build_server(Studio(model=a.model, challenge=challenge))
+    server = build_server(Studio(model=a.model, challenge=challenge, position=a.position, view_fit=view_fit,
+                                 fullscreen=a.full_screen))
     if a.http:
         server.run("streamable-http", host=a.host, port=a.port)
     else:

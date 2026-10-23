@@ -13,6 +13,11 @@ function BootLog(msg)
 	String.WriteFile(JOB.boot_log, BOOT_LOG)
 end
 BootLog("boot: job " .. jobPath)
+-- Windowed unless the job asks for full screen (the .vcfg then has windowed = 0 and a 4:3 mode).
+EXCLUSIVE = 0
+if JOB.fullscreen == 1 then
+	EXCLUSIVE = 1
+end
 
 if JOB.profile == "player" then
 	-- Same configuration sequence as the game's Motion Player boot script, but windowed.
@@ -21,7 +26,7 @@ if JOB.profile == "player" then
 	Execute("PlaybackMemoryConfiguration")
 	Execute("ServerConfiguration")
 	Execute("ProductConfiguration")
-	Config.Set("exclusive", 0)
+	Config.Set("exclusive", EXCLUSIVE)
 	Execute("MakeWindowCaption", JOB.window_title)
 	Config.Set("worldscale", 1)
 	Execute("StudioSettings")
@@ -41,7 +46,7 @@ else
 	Execute("BuildConfiguration")
 	Execute("MemoryConfiguration")
 	Execute("ProductConfiguration")
-	Config.Set("exclusive", 0)
+	Config.Set("exclusive", EXCLUSIVE)
 	Execute("MakeWindowCaption", JOB.window_title)
 	Config.Set("physically_connected_integrity", false)
 	Config.Set("auto_set_inertial_tensor", 1)
@@ -83,6 +88,11 @@ for i, name in JOB.classes do
 end
 
 mainWindow = Agent.Create("SimpleFrame")
+if JOB.curtain == 1 then
+	-- Black until the driver's cameras exist (it destroys the curtain): see HarnessCurtain.
+	JOB.curtain_agent = Agent.Create("HarnessCurtain")
+	BootLog("curtain " .. tostring(JOB.curtain_agent))
+end
 local driverClass = JOB.driver
 if driverClass == nil then
 	driverClass = "AIHarnessDriver"

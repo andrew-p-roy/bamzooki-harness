@@ -27,8 +27,48 @@ end
 -- leaving the engine's blue background visible around the view).
 function MessageFitWindow()
 	local w, h = Camera.Area()
-	MessageResize(0, 0, w, h)
+	FitArea(w, h)
 	return w
+end
+
+-- Letterbox: keep the view at `aspect` (width / height) and at most `maxw` wide, centred in the
+-- window; the rest shows the engine's background. Frames are captured at the view's size.
+function MessageSetFit(aspect, maxw)
+	myFitAspect = aspect
+	myFitMaxW = maxw
+	myAreaW = -1  -- re-fit on the next frame
+	return 1
+end
+
+-- A camera that only shows its background colour, behind a letterboxed one: the bars are
+-- otherwise the engine's own background (blue, sometimes black).
+function MessageBars(r, g, b)
+	Camera.SetBackground(r, g, b, 1)
+	Camera.SetClipPlanes(0.001, 0.002)  -- nothing in the world is that close
+	return 1
+end
+
+function MessageToFront()
+	Camera.ToFront()
+	return 1
+end
+
+function FitArea(w, h)
+	local vw = w
+	local vh = h
+	if myFitAspect ~= nil then
+		if vw > myFitMaxW then
+			vw = myFitMaxW
+		end
+		vh = Number.floor(vw / myFitAspect + 0.5)
+		if vh > h then
+			vh = h
+			vw = Number.floor(h * myFitAspect + 0.5)
+		end
+	end
+	local x = Number.floor((w - vw) / 2)
+	local y = Number.floor((h - vh) / 2)
+	MessageResize(x, y, x + vw, y + vh)
 end
 
 -- The follow-both mode narrows its view angle as the Zooks get closer; keep a minimum so the
@@ -77,7 +117,7 @@ function SystemCamera(frametime)
 	if w ~= myAreaW or h ~= myAreaH then
 		myAreaW = w
 		myAreaH = h
-		MessageResize(0, 0, w, h)
+		FitArea(w, h)
 	end
 	-- SplitCamera.UpdateView needs a view (SetView); until then (or for stills) leave it alone.
 	if myZook ~= nil and myZook ~= -1 then

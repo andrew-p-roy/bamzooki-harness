@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from bamzooki import music  # noqa: E402
-from bamzooki.runner import Engine, Job, contests  # noqa: E402
+from bamzooki.runner import MONITOR_VIEW, Engine, Job, contests  # noqa: E402
 
 
 def zook_path(engine: Engine, ref: str | None) -> Path | None:
@@ -49,7 +49,11 @@ def main() -> int:
     ap.add_argument("--view", choices=["follow", "overview", "green", "red"], default="follow",
                     help="view for --camera single / --video")
     ap.add_argument("--window", help="window client size WxH (default: the engine's own window)")
-    ap.add_argument("--position", choices=["right", "left", "center", "none"], default="none")
+    ap.add_argument("--position", choices=["right", "left", "center", "right-half", "left-half", "none"],
+                    default="none")
+    ap.add_argument("--monitor", action="store_true",
+                    help="one screen, as the arena's --monitor: the window on the right half, a 4:3 picture in it")
+    ap.add_argument("--full-screen", action="store_true", help="4:3 full screen, scaled up to fill the display")
     ap.add_argument("--raw-overrides", action="store_true", help="disable the default behaviour fixes")
     ap.add_argument("--focus", choices=["launch", "idle", "always"], default="idle")
     ap.add_argument("--music", metavar="TRACK", help="loop a track from Music/tracks.toml under the game from Go")
@@ -69,6 +73,9 @@ def main() -> int:
               window=tuple(int(x) for x in a.window.lower().split("x")) if a.window else None,
               position=a.position, model=a.model, countdown=a.countdown,
               music=music.load_tracks()[a.music] if a.music else None)
+    if a.monitor:
+        job.position, job.view_fit = "right-half", MONITOR_VIEW
+    job.fullscreen = a.full_screen
     if a.raw_overrides:
         job.overrides = {}
     r = engine.run(job, focus=a.focus)

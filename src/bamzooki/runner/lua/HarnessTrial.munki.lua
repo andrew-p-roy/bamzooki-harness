@@ -26,7 +26,15 @@ function MessageHarnessStart(job)
 	myNextTrack = 0
 	myWorld = World.Create()
 	World.OpenAccess(myWorld)
+	if job.view_fit ~= nil then
+		myBars = Agent.Create("HarnessCamera", 0, 0, job.window_w, job.window_h)
+		Agent.SendMessage("Bars", myBars, 0, 0, 0)
+	end
 	myCamera = Agent.Create("HarnessCamera", 0, 0, job.window_w, job.window_h)
+	if job.view_fit ~= nil then
+		Agent.SendMessage("SetFit", myCamera, job.view_fit.aspect, job.view_fit.max_w)
+		Agent.SendMessage("ToFront", myCamera)
+	end
 	Agent.SendMessage("FitWindow", myCamera)
 	-- The target must exist before the environment: environments move "BuilderTarget".
 	myTarget = Agent.Create("ClickableTarget", Vector.New(0, 0, -52), 0.5)
@@ -61,6 +69,9 @@ function MessageHarnessStart(job)
 		Agent.SendMessage("HarnessCapture", myCamera, job.capture_dir, job.capture_fps, 0, "hex")
 	end
 	World.CloseAccess()
+	if job.curtain_agent ~= nil then
+		Agent.SendMessage("Destroy", job.curtain_agent)
+	end
 	HLog("expressed " .. job.name .. " in " .. job.env)
 	Agent.SetTimer("Update", Agent.Me(), "update", job.update_interval)
 end

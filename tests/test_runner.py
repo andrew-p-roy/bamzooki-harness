@@ -302,3 +302,18 @@ def test_beep_wav(tmp_path):
         assert w.getframerate() == RATE and w.getnframes() == int(RATE * 0.2)
         frames = w.readframes(w.getnframes())
     assert frames[:2] == b"\x00\x00" and max(frames) > 0  # starts silent (no click), then sounds
+
+
+@pytest.mark.parametrize("work, right, rect", [
+    ((0, 0, 1920, 1032), True, (953, 0, 974, 1039)),     # 1080p, right half
+    ((0, 0, 1920, 1032), False, (-7, 0, 974, 1039)),     # left half
+    ((0, 0, 1366, 728), True, (676, 0, 697, 735)),       # odd half: the right one starts at 683
+    ((-1920, 40, 0, 1080), True, (-967, 40, 974, 1047)),  # a monitor left of the primary, taskbar on top
+])
+def test_half_rect_fills_the_half_with_the_visible_frame(work, right, rect):
+    from bamzooki.runner._win import half_rect
+
+    x, y, w, h = half_rect(work, right, (7, 0, 7, 7))  # Windows 11's invisible borders
+    assert (x, y, w, h) == rect
+    assert x + 7 == (work[2] - (work[2] - work[0]) // 2 if right else work[0])  # visible left edge
+    assert y + h - 7 == work[3]  # visible bottom = the work area's

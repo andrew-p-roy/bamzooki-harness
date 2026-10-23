@@ -43,6 +43,13 @@ TRIALS = {"sprint": ("SprintEnv", 20.0), "hurdles": ("Hurdles", 20.0), "lap": ("
 COUNTDOWN_PNG = "Agents/Governor/Countdown/Count.png"
 # Client area of the engine's default 900x700 window (the camera re-fits to the real area anyway).
 DEFAULT_CLIENT = (884, 662)
+# One-screen mode's picture (Job.view_fit) in a half-screen window: 4:3, at most 944 px wide (1080p's
+# half). Frame capture slows the engine in proportion to the view's pixels, and a slower engine plays
+# less of each game before the real-time limit.
+MONITOR_VIEW = (4 / 3, 944)
+# Full-screen mode's display mode (Job.fullscreen): 4:3, which the graphics card or monitor scales up
+# to fill the screen; about as many pixels as MONITOR_VIEW, so about the same speed.
+FULL_SCREEN_MODE = (1024, 768)
 
 
 
@@ -86,7 +93,12 @@ class Job:
     camera: str = "split"  # "split" = the game's 5-view layout, "single" = one follow camera
     view: str | dict = "follow"  # for camera="single": a VIEWS name or a view dict
     window: tuple[int, int] | None = None  # client size; None = engine default (~884x662). Capture cost scales with pixels
-    position: str = "none"  # move the window: right / left / center / none (stay where it opens)
+    # move the window: right / left / center / right-half / left-half (fill that half; ignores window) /
+    # none (stay where it opens)
+    position: str = "none"
+    # (aspect, max width): keep the camera view (and video) at that aspect, centred in the window
+    view_fit: tuple[float, int] | None = None
+    fullscreen: bool = False  # exclusive full screen at FULL_SCREEN_MODE (ignores window and position)
     config: dict = field(default_factory=dict)  # extra Config.Set values
     track_interval: float = 0.5
     model: str | None = None  # who designed/operates this run; renders go to <render_dir>/<model>/
@@ -141,6 +153,10 @@ def _posix(p: Path | str) -> str:
     return Path(p).resolve().as_posix()
 
 
+def _fit_spec(view_fit: tuple[float, int] | None) -> dict | None:
+    return {"aspect": float(view_fit[0]), "max_w": int(view_fit[1])} if view_fit else None
+
+
 class Engine:
     """A sandboxed copy of the user's install plus the harness boot scripts."""
 
@@ -169,14 +185,15 @@ class Engine:
             dst.write_bytes(script.encode(src, self.install.script_key.public_key()))
             stamp.write_bytes(src)
 
-    def write_video_cfg(self, size: tuple[int, int] | None) -> None:
+    def write_video_cfg(self, size: tuple[int, int] | None, fullscreen: bool = False) -> None:
         # Windowed mode ignores the size here (the runner resizes the window itself when asked);
-        # the file mainly keeps the engine out of the user's fullscreen Video.cfg.
+        # the file mainly keeps the engine out of the user's fullscreen Video.cfg. Full screen
+        # switches the display to FULL_SCREEN_MODE.
         if not self.install.save_dir:
             return
-        size = size or DEFAULT_CLIENT
+        size = FULL_SCREEN_MODE if fullscreen else size or DEFAULT_CLIENT
         cfg = {"bit_depth": 1, "quality": 1, "resolution_x": size[0],
-               "resolution_y": size[1], "shadow_quality": 1, "windowed": 1}
+               "resolution_y": size[1], "shadow_quality": 1, "windowed": 0 if fullscreen else 1}
         (self.install.save_dir / VIDEO_CFG).write_text(table.dumps(cfg), encoding="latin-1")
 
     def sandbox_zook(self, rel: str) -> Path:
@@ -187,7 +204,8 @@ class Engine:
         """Run one contest. focus: "launch" (focus once), "idle" (also re-take focus when the
         user has been idle 3 s), "always" (re-take whenever lost)."""
         self.prepare()
-        self.write_video_cfg(job.window)
+        self.write_video_cfg(job.window, job.fullscreen)
+        client = FULL_SCREEN_MODE if job.fullscreen else job.window or DEFAULT_CLIENT
         started = datetime.now()
         stamp = started.strftime("%Y%m%d-%H%M%S")
         run_dir = self.runs / f"{stamp}-{name or job.contest.contest_file}"
@@ -198,7 +216,7 @@ class Engine:
         single = job.video or job.camera == "single"
         if job.video:
             frames_dir.mkdir(exist_ok=True)
-        classes = CLASSES + (["HarnessCountdown"] if job.countdown else [])
+        classes = CLASSES + (["HarnessCountdown"] if job.countdown else []) + ["HarnessCurtain"]
         spec = {
             "contest_file": job.contest.contest_file,
             "green": _posix(job.green) if job.green else None,
@@ -214,8 +232,11 @@ class Engine:
             "camera": 3 if single else 1,
             "camera_def": job.contest.camera_def,
             "view": view_spec(job.view),
-            "window_w": (job.window or DEFAULT_CLIENT)[0],
-            "window_h": (job.window or DEFAULT_CLIENT)[1],
+            "window_w": client[0],
+            "window_h": client[1],
+            "view_fit": _fit_spec(job.view_fit),
+            "fullscreen": 1 if job.fullscreen else 0,
+            "curtain": 1,  # black until the cameras exist (HarnessCurtain)
             "capture": 1 if job.video else 0,
             "capture_dir": _posix(frames_dir),
             "capture_fps": job.video_fps,
@@ -248,7 +269,8 @@ class Engine:
                            music=job.music if job.live_sound else None)
         sound.start()
         try:
-            status, error, wall = self._launch(args, timeout, focus, job.window, job.position, after_go)
+            status, error, wall = self._launch(args, timeout, focus, None if job.fullscreen else job.window,
+                                               "none" if job.fullscreen else job.position, after_go)
         finally:
             sound.stop()
         raw: dict = {}
@@ -347,11 +369,13 @@ class Engine:
     # --- trials (the Zook Kit's Test mode) ------------------------------------------------
     def trial(self, zook: Path, name: str, trial: str = "sprint", duration: float = 20.0, video: bool = False,
               view: str | dict = "chase", model: str | None = None, fps: float = 25.0,
-              timeout: float | None = None, focus: str = "idle", video_path: Path | None = None) -> dict:
+              timeout: float | None = None, focus: str = "idle", video_path: Path | None = None,
+              window: tuple[int, int] | None = None, position: str = "none",
+              view_fit: tuple[float, int] | None = None, fullscreen: bool = False) -> dict:
         """Run one of the Zook Kit's trials (TRIALS) or free play in an environment ("free:BoxEnv")
         for `duration` sim seconds. Returns the trial's own result (as the Zook Kit reports it
         in the passport), the track, distance/height stats and optionally an MP4 (at video_path
-        when given, else in the render folder)."""
+        when given, else in the render folder). window, position, view_fit, fullscreen as in Job."""
         from .video import VideoError, frames_to_mp4, render_path
 
         if trial.startswith("free:"):
@@ -363,18 +387,22 @@ class Engine:
             raise KeyError(f"unknown trial {trial!r}; trials: {', '.join(TRIALS)}, or free:<Env> "
                            f"({', '.join(self.environments())})")
         self.prepare()
-        self.write_video_cfg(None)
+        self.write_video_cfg(window, fullscreen)
+        client = FULL_SCREEN_MODE if fullscreen else window or DEFAULT_CLIENT
+        if fullscreen:
+            window, position = None, "none"
         started = datetime.now()
         run_dir = self.runs / f"{started.strftime('%Y%m%d-%H%M%S')}-trial-{trial.replace(':', '-')}"
         frames_dir = run_dir / "frames"
         frames_dir.mkdir(parents=True, exist_ok=True)
         go_time = 3.0
         spec = {
-            "driver": "HarnessTrial", "classes": {1: "HarnessTrial"}, "camera": 3,
+            "driver": "HarnessTrial", "classes": {1: "HarnessTrial", 2: "HarnessCurtain"}, "camera": 3,
             "zook": _posix(zook), "name": name, "env": env, "trial": 1 if is_trial else 0,
             "go_time": go_time, "max_time": limit + (5.0 if is_trial else 0.0),
             "texture_dir": _posix(self.root / "NewTeam" / "Textures"),
-            "view": view_spec(view), "window_w": DEFAULT_CLIENT[0], "window_h": DEFAULT_CLIENT[1],
+            "view": view_spec(view), "window_w": client[0], "window_h": client[1],
+            "view_fit": _fit_spec(view_fit), "fullscreen": 1 if fullscreen else 0, "curtain": 1,
             "capture": 1 if video else 0, "capture_dir": _posix(frames_dir), "capture_fps": fps,
             "update_interval": 0.1, "track_interval": 0.5,
             "window_title": f"BAMZOOKi harness - trial {trial} - {name}",
@@ -385,7 +413,7 @@ class Engine:
         args = ["-init", BOOT_NAME, "-videocfg", VIDEO_CFG,
                 "-script", _posix(LUA_DIR / "boot.lua"), "-job", _posix(run_dir / "job.dat")]
         timeout = timeout or _wall_limit(go_time + limit)
-        status, error, wall = self._launch(args, timeout, focus)
+        status, error, wall = self._launch(args, timeout, focus, window, position)
         out = run_dir / "result.dat"
         raw = table.loads(out.read_text("latin-1")) if out.exists() else {}
         if not raw and status == "timeout":
@@ -482,16 +510,25 @@ class Engine:
 
         def watch():
             focused_once = False
-            sized = size is None and position == "none"  # default: leave the window as it opens
+            placed = checked = size is None and position == "none"  # default: leave the window as it opens
             while not stop.is_set() and proc.poll() is None:
                 wins = _win.windows_of(proc.pid)
-                if not sized:
-                    # The engine ignores the .vcfg size in windowed mode; set the client area
-                    # once our boot script has titled the window (SimpleFrame exists by then).
+                if not placed:
+                    for hwnd, title in wins:
+                        if "Error" not in title:
+                            # Post the move (and resize) as soon as the window exists. The engine's thread
+                            # handles no messages for its first ~2 s, until its main loop starts (SimpleFrame
+                            # exists by then); this way the change is waiting for it, instead of arriving
+                            # during the driver's loading (another ~2 s for a trial).
+                            _win.place_window(hwnd, *(size or _win.client_size(hwnd)), position, wait=False)
+                            placed = True
+                elif not checked:
                     for hwnd, title in wins:
                         if title.startswith("BAMZOOKi harness"):
-                            _win.place_window(hwnd, *(size or _win.client_size(hwnd)), position)
-                            sized = True
+                            # The engine ignores the .vcfg size in windowed mode: make sure the size took.
+                            if size and _win.client_size(hwnd) != tuple(size):
+                                _win.place_window(hwnd, *size, position)
+                            checked = True
                 for hwnd, title in wins:
                     if "Error" in title:
                         state["error_window"] = title

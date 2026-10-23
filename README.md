@@ -266,7 +266,30 @@ challenger Zook, its design and its testing strategy, and then **you can talk to
 python tools/arena.py --challenger anthropic/claude-sonnet-4.5 --challenger openai/gpt-5
 python tools/arena.py --challenge challenges/short.toml           # quick 3-run sessions
 python tools/arena.py --auto --challenger google/gemini-2.5-flash # unattended, then leaderboard
+python tools/arena.py --monitor                                   # one screen: games on the right
+python tools/arena.py --full-screen                               # games in 4:3 full screen
 ```
+
+**Full screen (`--full-screen`).** Test and tournament games switch the display to 1024×768 (4:3)
+and run full screen; your graphics card or monitor scales that up to fill the screen, whatever its
+resolution. Whether the sides get black bars or the picture is stretched is the scaling setting in
+your graphics driver ("maintain aspect ratio" for bars). It runs at about the same speed as
+`--monitor` (0.79× real time) and videos are 1024×768. The terminal is hidden while a game plays,
+and switching to it pauses the game. Without `--monitor` or `--full-screen`, every game uses the
+engine's own window, where it opens. In every mode the window is black while a game loads (after
+a moment of white while the engine itself starts).
+
+**One screen (`--monitor`).** Test games (a model's `run_contest` and `run_trial`) and tournament
+games (`/contest`, `/exhibition`) fill the right half of the main screen with the engine window,
+so the terminal can take the left half (Win+Left snaps it there). Inside the window the picture
+stays 4:3, centred with black bars, and at most 944×708 (half a 1080p screen) on bigger screens:
+capture slows the engine in proportion to the picture's pixels, and a slower engine plays less
+of each game before the real-time limit (944×708 runs at about 0.79× real time against 0.83×
+for the default window). Videos are the picture, so they stay 4:3. The window moves about 2 s
+after it opens, when the engine starts handling window messages; nothing can move it sooner.
+Challenge games, previews and replays stay as they open. Without the flag, every window stays
+where it opens (for example, on a second monitor). `tools/run_contest.py --monitor` does the same
+for one game.
 
 At the `you>` prompt:
 
@@ -403,6 +426,8 @@ announcer = "anthropic/claude-haiku-5.5"
 announcer_style = "ringside"
 speak = true
 voice = "Microsoft Hazel Desktop"
+monitor = true       # one screen: test and tournament games on the right
+# full_screen = true # or: test and tournament games in 4:3 full screen
 ```
 
 **While a game is playing, leave the engine window in front** and don't close it. The game only

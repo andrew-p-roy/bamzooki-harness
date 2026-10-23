@@ -13,7 +13,8 @@
 -- countdown_size of the window's shorter side; each count is logged ("countdown 3" ... "countdown go"),
 -- camera: 1 = the game's SplitScreen (5 views) + lights, 2 = 2x2-pixel camera (no picture),
 --         3 = one full-window HarnessCamera + lights, with view = { zook, offset, angle } and optional
---             frame capture (capture = 1, capture_dir, capture_fps, capture_start; size = window_w/h).
+--             frame capture (capture = 1, capture_dir, capture_fps, capture_start; size = window_w/h,
+--             or the view's with view_fit = { aspect, max_w }, which letterboxes it in the window).
 
 function HLog(msg)
 	myLogText = myLogText .. String.format("%8.3f ", System.RealTime() - myStartReal) .. msg .. "\n"
@@ -127,7 +128,15 @@ function Setup()
 	end
 	World.OpenAccess(myWorld)
 	if myJob.camera == 3 then
+		if myJob.view_fit ~= nil then
+			myBars = Agent.Create("HarnessCamera", 0, 0, myJob.window_w, myJob.window_h)
+			Agent.SendMessage("Bars", myBars, 0, 0, 0)
+		end
 		myHarnessCamera = Agent.Create("HarnessCamera", 0, 0, myJob.window_w, myJob.window_h)
+		if myJob.view_fit ~= nil then
+			Agent.SendMessage("SetFit", myHarnessCamera, myJob.view_fit.aspect, myJob.view_fit.max_w)
+			Agent.SendMessage("ToFront", myHarnessCamera)
+		end
 		HLog("camera fitted to width " .. tostring(Agent.SendMessage("FitWindow", myHarnessCamera)))
 		local v = myJob.view
 		Agent.SendMessage("SetMinAngle", myHarnessCamera, v.min_angle)
@@ -150,6 +159,9 @@ function Setup()
 		CreateLights()
 	end
 	World.CloseAccess()
+	if myJob.curtain_agent ~= nil then
+		Agent.SendMessage("Destroy", myJob.curtain_agent)
+	end
 	if myJob.countdown == 1 and (myJob.camera == 1 or myJob.camera == 3) then
 		myCountdown = Agent.Create("HarnessCountdown", myWorld, myJob.go_time, myJob.countdown_size,
 			Agent.Me())

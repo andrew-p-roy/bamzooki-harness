@@ -39,10 +39,13 @@ class Studio:
     models' designs are hidden and can't be referenced. With a challenge, test runs are budgeted."""
 
     def __init__(self, model: str | None = "manual", engine: Engine | None = None,
-                 challenge: Challenge | None = None):
+                 challenge: Challenge | None = None, position: str = "none",
+                 view_fit: tuple[float, int] | None = None, fullscreen: bool = False):
         """model: the entrant's full model name (e.g. "anthropic/claude-sonnet-4.5"); its folder
-        is "Zook Entries/<name with / replaced>". None = the model registers itself first."""
+        is "Zook Entries/<name with / replaced>". None = the model registers itself first.
+        position, view_fit, fullscreen: how test games (run_contest, trial) show the engine (as in Job)."""
         self.engine = engine or Engine()
+        self.position, self.view_fit, self.fullscreen = position, view_fit, fullscreen
         self.install = self.engine.install
         self.engine.prepare()
         self.zoo = Zoo(self.install, examples_root=self.engine.root / "Teams" / "examples" / "Creatures")
@@ -231,7 +234,8 @@ class Studio:
             duration = self.challenge.time_limit
         vs = f" vs {_short(rd)}" if rd else ""
         job = Job(info, g.path, rd.path if rd else None, seed=seed, duration=duration, video=video,
-                  record=record, model=self.model,
+                  record=record, model=self.model, position=self.position, view_fit=self.view_fit,
+                  fullscreen=self.fullscreen,
                   video_path=self._video_path(f"{self._test_label()} - {info.name} - {_short(g)}{vs} - seed {seed}"))
         with self.lock:
             r = self.engine.run(job, name=info.contest_file)
@@ -306,6 +310,7 @@ class Studio:
             return {"error": why, "budget": self.state.budget()}
         with self.lock:
             res = self.engine.trial(r.path, r.name, trial, duration=duration, video=video, model=self.model,
+                                    position=self.position, view_fit=self.view_fit, fullscreen=self.fullscreen,
                                     video_path=self._video_path(
                                         f"{self._test_label()} - Trial {trial.replace(':', ' ')} - {_short(r)}"))
         sheet = None

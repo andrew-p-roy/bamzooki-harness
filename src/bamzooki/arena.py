@@ -3,6 +3,8 @@
     python tools/arena.py                                  # challengers from bamzooki.toml [arena]
     python tools/arena.py --challenger openai/gpt-5 --challenger anthropic/claude-sonnet-4.5
     python tools/arena.py --challenge challenges/short.toml
+    python tools/arena.py --monitor                        # one screen: test/tournament games on the right
+    python tools/arena.py --full-screen                    # test/tournament games in 4:3 full screen
 
 For each challenger the runner starts the bamzooki MCP server (stdio) with the challenger's full
 model name, working in the arena folder (outside the repo), and runs an agent loop over
@@ -272,8 +274,18 @@ class Arena:
     def __init__(self, challenge: Challenge, queue: list[str], max_turns: int = 120, max_tokens: int = 4000,
                  temperature: float | None = None, auto: bool = False, verbose: bool = False,
                  show: bool = False, announcer: str | None = DEFAULT_ANNOUNCER,
-                 announcer_style: str = "ringside", speak: bool = False, voice: str | None = None):
+                 announcer_style: str = "ringside", speak: bool = False, voice: str | None = None,
+                 monitor: bool = False, fullscreen: bool = False):
         self.cfg = load_config()
+        # --monitor: test and tournament games put the engine window on the right half of the main
+        # screen with a 4:3 picture (at most 1080p's half) in it, leaving the left for this terminal.
+        # --full-screen: they run in 4:3 full screen instead, scaled up to fill the display. Either
+        # way, other games (and, without them, every game) stay in the engine's own window.
+        from .runner import MONITOR_VIEW
+
+        self.position = "right-half" if monitor else "none"
+        self.view_fit = MONITOR_VIEW if monitor else None
+        self.fullscreen = fullscreen
         self.challenge = challenge
         self.queue = list(queue)
         self.max_turns = max_turns
@@ -334,7 +346,9 @@ class Arena:
                "BAMZOOKI_ARENA_DIR": str(self.arena_dir)}
         params = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "bamzooki.mcp_server", "--model", model, "--challenge", str(self.challenge.path)],
+            args=["-m", "bamzooki.mcp_server", "--model", model, "--challenge", str(self.challenge.path),
+                  "--position", self.position] + (["--view-fit", "{},{}".format(*self.view_fit)] if self.view_fit else [])
+                 + (["--full-screen"] if self.fullscreen else []),
             cwd=str(self.arena_dir), env=env)
         # The server's own output (tracebacks from tools a model called wrongly) goes beside the
         # transcript, not over the audience's screen; the model still gets the error as the result.
@@ -749,7 +763,8 @@ class Arena:
         def play(green: tournament.Seat, red: tournament.Seat, seed: int) -> tuple[str, str | None, str]:
             job = Job(info, zoo.resolve(green.zook).path, zoo.resolve(red.zook).path, seed=seed,
                       duration=self.challenge.time_limit, video=True, model="Tournament", countdown=True,
-                      music=track, live_sound=self.show)  # the videos get the sound either way
+                      music=track, live_sound=self.show,  # the videos get the sound either way
+                      position=self.position, view_fit=self.view_fit, fullscreen=self.fullscreen)
             r = engine.run(job, name=f"cup-{info.contest_file}")
             now["game"] += 1
             now["last"] = (r.video, r.finish_time, r.video_lead) if r.video else None
@@ -1406,7 +1421,17 @@ def main(argv: list[str] | None = None) -> None:
                          "[arena] speak)")
     ap.add_argument("--voice", default=a_cfg.get("voice"),
                     help='speech voice, e.g. "Microsoft Hazel Desktop" ([arena] voice; default: the system\'s)')
+    screen = ap.add_mutually_exclusive_group()
+    screen.add_argument("--monitor", action="store_true", default=bool(a_cfg.get("monitor", False)),
+                        help="single-monitor mode: test and tournament games put the engine window on the right half "
+                             "of the main screen, with a 4:3 picture (at most 1080p's half) in it, leaving the left "
+                             "for this terminal ([arena] monitor)")
+    screen.add_argument("--full-screen", action="store_true", default=bool(a_cfg.get("full_screen", False)),
+                        help="test and tournament games run in 4:3 full screen, scaled up to fill the display "
+                             "([arena] full_screen). Default: the engine's own window, where it opens")
     a = ap.parse_args(argv)
+    if a.full_screen:
+        a.monitor = False  # e.g. [arena] monitor = true in the config, --full-screen on the command line
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     challenge_path = a.challenge or a_cfg.get("challenge") or cfg.challenge
@@ -1416,7 +1441,8 @@ def main(argv: list[str] | None = None) -> None:
     queue = a.challenger or list(a_cfg.get("challengers", []))
     arena = Arena(challenge, queue, a.max_turns, a.max_tokens, a.temperature, a.auto, a.verbose, show=a.showtime,
                   announcer=None if a.no_announcer or str(a.announcer).lower() in ("", "none", "off") else a.announcer,
-                  announcer_style=a.announcer_style, speak=a.speak, voice=a.voice)
+                  announcer_style=a.announcer_style, speak=a.speak, voice=a.voice, monitor=a.monitor,
+                  fullscreen=a.full_screen)
     if not a.keep_entries and (moved := arena.archive_entries()):
         say(f"Previous Zook Entries archived to {moved}: every model starts afresh (--keep-entries to carry on).",
             "dim")

@@ -68,10 +68,12 @@ def client_size(hwnd: int) -> tuple[int, int]:
     return cli.right - cli.left, cli.bottom - cli.top
 
 
-def place_window(hwnd: int, width: int, height: int, position: str = "right") -> None:
+def place_window(hwnd: int, width: int, height: int, position: str = "right", wait: bool = True) -> None:
     """Give a window a client (drawable) area of width x height and dock it in the primary
     monitor's work area: "right" (top-right, leaving the left free for e.g. a terminal),
-    "left", "center", or "none" (keep where Windows put it)."""
+    "left", "center", or "none" (keep where Windows put it). "right-half" / "left-half" ignore
+    width x height and make the window's visible frame fill that half of the work area. wait=False
+    only posts the change to the window's thread (applied when it next handles messages)."""
     if not IS_WINDOWS:
         return
     win, cli, work = wintypes.RECT(), wintypes.RECT(), wintypes.RECT()
@@ -81,7 +83,12 @@ def place_window(hwnd: int, width: int, height: int, position: str = "right") ->
     outer_h = height + (win.bottom - win.top) - (cli.bottom - cli.top)
     _user32.SystemParametersInfoW(0x30, 0, ctypes.byref(work), 0)  # SPI_GETWORKAREA
     x, y, flags = win.left, win.top, 0x4 | 0x10  # SWP_NOZORDER | SWP_NOACTIVATE
-    if position == "right":
+    if not wait:
+        flags |= 0x4000  # SWP_ASYNCWINDOWPOS
+    if position in ("right-half", "left-half"):
+        x, y, outer_w, outer_h = half_rect((work.left, work.top, work.right, work.bottom), position == "right-half",
+                                           _invisible_borders(hwnd, win))
+    elif position == "right":
         x, y = work.right - outer_w, work.top
     elif position == "left":
         x, y = work.left, work.top
@@ -89,6 +96,25 @@ def place_window(hwnd: int, width: int, height: int, position: str = "right") ->
         x = work.left + (work.right - work.left - outer_w) // 2
         y = work.top + (work.bottom - work.top - outer_h) // 2
     _user32.SetWindowPos(hwnd, 0, x, y, outer_w, outer_h, flags)
+
+
+def _invisible_borders(hwnd: int, win) -> tuple[int, int, int, int]:
+    """(left, top, right, bottom) of the window rect that isn't drawn: Windows 10/11 frames have
+    invisible resize borders of about 7 px, outside the visible frame (DWM's extended frame bounds)."""
+    vis = wintypes.RECT()
+    if ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(vis), ctypes.sizeof(vis)):  # EXTENDED_FRAME_BOUNDS
+        return 0, 0, 0, 0
+    return vis.left - win.left, vis.top - win.top, win.right - vis.right, win.bottom - vis.bottom
+
+
+def half_rect(work: tuple[int, int, int, int], right: bool,
+              borders: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """(x, y, width, height) of a window whose visible frame fills the right (or left) half of the
+    work area (left, top, right, bottom), given its invisible borders (left, top, right, bottom)."""
+    half = (work[2] - work[0]) // 2
+    x0 = work[2] - half if right else work[0]
+    return (x0 - borders[0], work[1] - borders[1],
+            half + borders[0] + borders[2], work[3] - work[1] + borders[1] + borders[3])
 
 
 def user_idle_seconds() -> float:
