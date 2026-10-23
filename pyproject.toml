@@ -16,6 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+voice = [
+    "kokoro-onnx>=0.6",  # --speak: natural announcer voice (model downloaded on first use)
+]
 dev = [
     "pytest>=8",
     "pre-commit>=3",

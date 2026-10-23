@@ -75,8 +75,9 @@ Tips:
   - knockout games play their **sound** live (Windows): a starting beeper on the countdown and the
     match music looping under the game from Go (the videos and highlights have it either way).
 
-  With it, `--speak` reads the announcer aloud (Windows speech; try
-  `--voice "Microsoft Hazel Desktop"`), and `--announcer-style documentary` changes the host.
+  With it, `--speak` reads the announcer aloud, and `--announcer-style documentary` changes the host.
+  For a natural British announcer, `pip install -e .[voice]` (Kokoro; its 340 MB model downloads on
+  first use): the default voice is then `bm_george`. Without it, Windows speech reads the lines.
   Without `--showtime` the arena makes no extra calls. You can still talk to any model yourself,
   and the champion still takes your questions.
 
@@ -407,8 +408,8 @@ the highlights reel with music, and the Hall of Fame prompt and `/halloffame`.
 | `--announcer <model>` | any OpenRouter model (`[arena] announcer`) |
 | `--no-announcer` | the show without an announcer; interviews use stock questions |
 | `--announcer-style <style>` | `ringside` (default), `documentary`, `football`, `noir`, or describe your own: `--announcer-style "a pirate captain who is new to robots"` |
-| `--speak` | read the announcer aloud (Windows speech, macOS `say`, Linux `espeak`; `[arena] speak = true`) |
-| `--voice <name>` | e.g. `"Microsoft Hazel Desktop"` (British) or `"Microsoft Zira Desktop"` |
+| `--speak` | read the announcer aloud (Kokoro if installed with `pip install -e .[voice]`, else Windows speech, macOS `say`, Linux `espeak`; `[arena] speak = true`) |
+| `--voice <name>` | a Kokoro voice: `bm_george` (default, British male), `bm_lewis`, `bm_daniel`, `bf_emma`, ...; or a system one, e.g. `"Microsoft Hazel Desktop"`. `[arena] voice_speed` sets Kokoro's pace (default 1.1) |
 
 The announcer's tokens and cost are a row in the `/end` table. Everything it said is kept in
 `Transcripts/Announcer/`.
@@ -425,7 +426,8 @@ showtime = true      # the show: announcer, pre-match lines, interviews, victory
 announcer = "anthropic/claude-haiku-5.5"
 announcer_style = "ringside"
 speak = true
-voice = "Microsoft Hazel Desktop"
+voice = "bm_george"   # Kokoro (pip install -e .[voice]); or e.g. "Microsoft Hazel Desktop"
+voice_speed = 1.1
 monitor = true       # one screen: test and tournament games on the right
 # full_screen = true # or: test and tournament games in 4:3 full screen
 ```
@@ -476,7 +478,7 @@ src/bamzooki/
   tournament.py the /contest knockout bracket
   announcer.py  the show's host (introductions, calls, interviews)
   showtime.py   model fact sheets, Zook cards, end-of-game stills, Hall of Fame, highlights
-  voice.py      --speak: the announcer read aloud by the system's speech engine
+  voice.py      --speak: the announcer read aloud (Kokoro, or the system's speech engine)
   music.py      match music (live and in the reel): tracks, loop points, the track for a challenge
 Music/          match music (Lyria 3 clips) and tracks.toml (loop points, tags, default)
 Model Instructions/  agent prompt, design guide, your manual copy (what models are told)

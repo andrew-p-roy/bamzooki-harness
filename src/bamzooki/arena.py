@@ -304,9 +304,12 @@ class Arena:
         self.announcer = Announcer(self.router, announcer, announcer_style) if show and announcer else None
         self.voice = None
         if speak and self.announcer:
-            from .voice import Voice
+            from .voice import KOKORO_FILES, KOKORO_SPEED, Voice
 
-            self.voice = Voice(voice)
+            self.voice = Voice(voice, cache=self.cfg.cache_dir / "kokoro",
+                               speed=float(self.cfg.arena.get("voice_speed", KOKORO_SPEED)))
+            if self.voice.kokoro and not all((self.cfg.cache_dir / "kokoro" / f).exists() for f in KOKORO_FILES):
+                say("(--speak: downloading the Kokoro voice model, about 340 MB, once)", "dim")
             if not self.voice.available:
                 say("(--speak: no speech engine found on this system; the announcer stays on screen)", "y")
                 self.voice = None
@@ -1417,10 +1420,11 @@ def main(argv: list[str] | None = None) -> None:
                     help="with --showtime: ringside (default), documentary, football, noir, or your own description "
                          "of a style")
     ap.add_argument("--speak", action="store_true", default=bool(a_cfg.get("speak", False)),
-                    help="with --showtime: the announcer speaks out loud (Windows speech, macOS say, Linux espeak; "
-                         "[arena] speak)")
+                    help="with --showtime: the announcer speaks out loud (Kokoro if installed, else Windows speech, "
+                         "macOS say, Linux espeak; [arena] speak)")
     ap.add_argument("--voice", default=a_cfg.get("voice"),
-                    help='speech voice, e.g. "Microsoft Hazel Desktop" ([arena] voice; default: the system\'s)')
+                    help='speech voice: a Kokoro voice (default bm_george, British male; bm_lewis, bf_emma, ...) or '
+                         'a system one, e.g. "Microsoft Hazel Desktop" ([arena] voice)')
     screen = ap.add_mutually_exclusive_group()
     screen.add_argument("--monitor", action="store_true", default=bool(a_cfg.get("monitor", False)),
                         help="single-monitor mode: test and tournament games put the engine window on the right half "

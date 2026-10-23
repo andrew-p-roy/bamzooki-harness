@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from pathlib import Path
 
 from bamzooki import showtime
 from bamzooki.announcer import Announcer, clean
@@ -141,9 +142,30 @@ def test_voice_without_an_engine_is_silent(monkeypatch):
     from bamzooki import voice
 
     monkeypatch.setattr(voice, "speech_command", lambda *a, **k: None)
-    v = voice.Voice()
+    monkeypatch.setattr(voice, "kokoro_installed", lambda: False)
+    v = voice.Voice(cache=Path("unused"))
     v.say("hello")
     assert not v.available and v.lines.empty()
+
+
+def test_sentences_join_short_ones():
+    from bamzooki.voice import sentences
+
+    assert sentences("And they're off! Spider charges straight for the middle of the table. What a shove! "
+                     "It's over!") == ["And they're off! Spider charges straight for the middle of the table.",
+                                       "What a shove! It's over!"]
+    assert sentences("") == []
+
+
+def test_voice_picks_kokoro_for_kokoro_voices_only(monkeypatch):
+    from bamzooki import voice
+
+    monkeypatch.setattr(voice, "kokoro_installed", lambda: True)
+    monkeypatch.setattr(voice.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    assert voice.Voice(cache=Path("c")).name == "bm_george"
+    assert voice.Voice("bf_emma", cache=Path("c")).kokoro
+    assert not voice.Voice("Microsoft Hazel Desktop", cache=Path("c")).kokoro
+    assert not voice.Voice(cache=None).kokoro  # no model folder: the system's engine
 
 
 def test_hall_of_fame_and_record(tmp_path):
