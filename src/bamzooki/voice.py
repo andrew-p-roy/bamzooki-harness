@@ -33,6 +33,11 @@ KOKORO_FILES = {  # the kokoro-onnx project's published model files
     "voices-v1.0.bin": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
 }
 KOKORO_VOICE = re.compile(r"^[abefhijpz][fm]_[a-z]+$")  # e.g. bm_george, bf_emma, am_adam
+# The contestants' own voices (presentations, trash talk, interviews, answers), by lab; [arena] voices
+# overrides by lab or full model id. Other labs get one from POOL, the same one every time.
+LAB_VOICES = {"google": "af_heart", "qwen": "bf_emma", "openai": "am_puck", "anthropic": "am_michael"}
+POOL = ["am_fenrir", "af_nicole", "bf_isabella", "am_eric", "af_sarah", "bm_fable", "af_bella", "am_liam",
+        "bf_lily", "am_adam"]
 
 PS_SPEAK = ("[Console]::InputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Speech; "
             "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = {rate}; {voice}{output}"
@@ -93,6 +98,16 @@ def sentences(text: str, min_len: int = 40) -> list[str]:
     return out
 
 
+def model_voice(model: str, overrides: dict | None = None) -> str:
+    """The Kokoro voice a contestant speaks with."""
+    import zlib
+
+    lab = model.lstrip("~").split("/")[0]
+    overrides = overrides or {}
+    return (overrides.get(model) or overrides.get(lab) or LAB_VOICES.get(lab)
+            or POOL[zlib.crc32(lab.encode()) % len(POOL)])
+
+
 def kokoro_installed() -> bool:
     try:
         import kokoro_onnx  # noqa: F401
@@ -146,7 +161,7 @@ class Voice:
 
     def __init__(self, voice: str | None = None, rate: int = 1, cache: Path | None = None,
                  speed: float = KOKORO_SPEED):
-        self.lines: queue.Queue[str] = queue.Queue()
+        self.lines: queue.Queue[tuple[str, str | None]] = queue.Queue()  # (text, Kokoro voice or None)
         self.kokoro = kokoro_installed() and cache is not None and (voice is None or bool(KOKORO_VOICE.match(voice)))
         self.command = None if self.kokoro else speech_command(voice, rate)
         self.name = (voice or KOKORO_DEFAULT) if self.kokoro else voice
@@ -162,13 +177,24 @@ class Voice:
     def available(self) -> bool:
         return self.kokoro or self.command is not None
 
-    def say(self, text: str) -> None:
+    def say(self, text: str, voice: str | None = None) -> None:
+        """Queue a line; voice: a Kokoro voice for this line (a contestant's), else the announcer's."""
         if self.available and (text := speakable(text)):
-            self.lines.put(text)
+            self.lines.put((text, voice))
+
+    def say_now(self, text: str) -> None:
+        """Live commentary: drop whatever hasn't been spoken yet (the line playing finishes), then say this."""
+        for q in (self.lines, getattr(self, "audio", None)):
+            while q is not None:
+                try:
+                    q.get_nowait()
+                except Exception:
+                    break
+        self.say(text)
 
     def _run(self) -> None:
         while True:
-            text = self.lines.get()
+            text, _ = self.lines.get()  # the system engine has the one voice
             try:
                 subprocess.run(self.command, input=text.encode("utf-8"), capture_output=True, timeout=180,
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -182,11 +208,13 @@ class Voice:
             engine = Kokoro(*(str(p) for p in kokoro_model(self.cache)))
         except Exception:  # no model and no download: stay silent rather than break the show
             return
-        lang = "en-gb" if self.name[0] == "b" else "en-us"
         while True:
-            for piece in sentences(self.lines.get()):
+            text, voice = self.lines.get()
+            name = voice or self.name
+            lang = "en-gb" if name[0] == "b" else "en-us"
+            for piece in sentences(text):
                 try:
-                    samples, rate = engine.create(piece, voice=self.name, speed=self.speed, lang=lang)
+                    samples, rate = engine.create(piece, voice=name, speed=self.speed, lang=lang)
                 except Exception:
                     continue
                 self.audio.put(wav_bytes(samples, rate))

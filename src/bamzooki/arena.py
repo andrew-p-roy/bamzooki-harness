@@ -69,6 +69,7 @@ from . import music, showtime, tournament
 from .announcer import DEFAULT_MODEL as DEFAULT_ANNOUNCER
 from .announcer import Announcer
 from .challenge import Challenge, ChallengeState
+from .commentary import DEFAULT_MODEL as COMMENTATOR
 from .config import REPO_ROOT, load_config
 from .manual import MODEL_INSTRUCTIONS
 from .sdk.store import entrant_folder
@@ -80,6 +81,8 @@ KICKOFF = ("Begin the challenge now. Start with get_challenge. Work only through
 SHOW_WORDS = 100  # model text between tool calls is cut to this many words on screen (not in transcripts)
 NUDGE = ("You haven't submitted yet. Keep going with the bamzooki tools; when you're ready (or out of "
          "runs), call submit_design with your best design, then present your challenger.")
+# --showtime: the presentation is read out on stage, so it's kept short ([arena] presentation_words).
+SHOW_PRESENTATION = " Keep your presentation to at most {words} words: it is read out on stage."
 PRE_MATCH = ("The {contest}, {round}: your Zook {mine} is about to play {opp_model}'s Zook {opp_zook} "
              "({opp_card}). {seen}{heard}Say something to the audience before the game: a comment, some "
              "trash talk, or a boast about {mine}. Answer in ONE line (no line breaks, no lists) and don't "
@@ -275,7 +278,7 @@ class Arena:
                  temperature: float | None = None, auto: bool = False, verbose: bool = False,
                  show: bool = False, announcer: str | None = DEFAULT_ANNOUNCER,
                  announcer_style: str = "ringside", speak: bool = False, voice: str | None = None,
-                 monitor: bool = False, fullscreen: bool = False):
+                 monitor: bool = False, fullscreen: bool = False, commentator: str | None = None):
         self.cfg = load_config()
         # --monitor: test and tournament games put the engine window on the right half of the main
         # screen with a 4:3 picture (at most 1080p's half) in it, leaving the left for this terminal.
@@ -296,7 +299,8 @@ class Arena:
         self.ending = False  # /end: finish with the session's table
         self.knockout_places: dict[str, int] = {}  # model -> place in the last /contest
         self.picks = [0, 0]  # the audience's /pick predictions in the last /contest: right, made
-        self.router = OpenRouter(load_api_key(), max_tokens, temperature)
+        self.api_key = load_api_key()
+        self.router = OpenRouter(self.api_key, max_tokens, temperature)
         # --showtime: the announcer, the models seeing each other's Zooks, the pre-match lines, the
         # interviews and Hall of Fame mentions (all extra model calls). Off, the arena only calls the
         # models for their own work, the champion's speech and what the audience says to them.
@@ -313,6 +317,8 @@ class Arena:
             if not self.voice.available:
                 say("(--speak: no speech engine found on this system; the announcer stays on screen)", "y")
                 self.voice = None
+        # Live commentary on the show's games (a fast vision model writing George's lines): needs the voice.
+        self.commentator = commentator if self.voice and commentator else None
         self.arena_dir = self.cfg.arena_dir
         self.arena_dir.mkdir(parents=True, exist_ok=True)
         self.show_log = self.cfg.transcripts_dir / "Announcer" / f"{time.strftime('%Y-%m-%d_%H-%M-%S')}.md"
@@ -383,8 +389,54 @@ class Arena:
         with e.transcript.open("a", encoding="utf-8") as f:
             f.write(f"\n### {kind} ({time.strftime('%H:%M:%S')})\n\n{text}\n")
 
-    def _announce(self, text: str, who: str = "ANNOUNCER") -> None:
-        """The announcer speaks: printed in its own colour and kept in Transcripts/Announcer/."""
+    def _game_and_map(self) -> str:
+        """'  |  game: Zook Sumo  |  map: Polo Table, Table Sumo': the challenge's contest and the props
+        its arena is built from ("" if the install can't be read)."""
+        from .install import Install
+        from .runner import contests
+
+        name = self.challenge.evaluation.contest
+        try:
+            inst = Install.discover()
+            data = contests.load_contest_file(inst, contests.find(name, inst).contest_file)
+        except Exception:
+            return f"  |  game: {name}"
+        props = sorted({a.get("agent") for a in (data.get("agents") or {}).values()
+                        if isinstance(a, dict) and a.get("agent") not in (None, "ZookPlaceHolder", "Target")})
+        return f"  |  game: {name}" + ("  |  map: " + ", ".join(_spaced(p) for p in props) if props else "")
+
+    def _presentation_limit(self) -> str:
+        """With the show, the models are asked to keep their presentation short (read in full anyway)."""
+        return SHOW_PRESENTATION.format(words=int(self.cfg.arena.get("presentation_words", 120))) if self.show else ""
+
+    def _speak_as(self, model: str, text: str) -> None:
+        """--speak: a contestant's own words, in full, in its own voice (Kokoro; voice.LAB_VOICES, or
+        [arena.voices])."""
+        if not text or not getattr(self, "voice", None) or not self.voice.kokoro:
+            return
+        from .voice import model_voice
+
+        self.voice.say(text, voice=model_voice(model, self.cfg.arena.get("voices")))
+
+    def _commentary_brief(self, event: str, round_name: str, green, red, cards: dict) -> str:
+        """What the live commentator knows about a game: the event, who made each Zook, the tale of the
+        tape, what each looks like and its designer's notes."""
+        a, b = cards.get(green.model), cards.get(red.model)
+        lines = [f"{event}, {round_name or 'match'}: GREEN side is {green.zook_name}, designed by {green.model}; "
+                 f"RED side is {red.zook_name}, designed by {red.model}. (Green and red are only the sides, not the "
+                 "Zooks' colours.)"]
+        if a and b:
+            lines += ["Tale of the tape:"] + showtime.tale_of_the_tape(a, b, "GREEN", "RED")
+            if looks := showtime.tell_apart(a, b):
+                lines.append(f"What they look like: {looks}")
+            for side, card in (("GREEN", a), ("RED", b)):
+                if card.notes:
+                    lines.append(f"{side} designer's notes: {card.notes[:300]}")
+        return "\n".join(lines)
+
+    def _announce(self, text: str, who: str = "ANNOUNCER", live: bool = False) -> None:
+        """The announcer speaks: printed in its own colour and kept in Transcripts/Announcer/. live: commentary,
+        which replaces anything not yet spoken."""
         if not text:
             if (host := getattr(self, "announcer", None)) and host.last_error:
                 say(f"\n  [the announcer missed that one: {host.last_error}"
@@ -393,7 +445,7 @@ class Arena:
         say(f"\n  {who}: ", "a", end="")
         say(text, "a")
         if getattr(self, "voice", None):
-            self.voice.say(text)
+            (self.voice.say_now if live else self.voice.say)(text)
         try:
             self.show_log.parent.mkdir(parents=True, exist_ok=True)
             with self.show_log.open("a", encoding="utf-8") as f:
@@ -448,7 +500,7 @@ class Arena:
             self.entrant.facts["arena_record"] = record
         say(f"\n=== Challenger: {model} ===", "b")
         say(f"    {showtime.card_line(self.entrant.facts)}", "dim")
-        say(f"    challenge: {self.challenge.title}  |  arena: {self.arena_dir}", "dim")
+        say(f"    challenge: {self.challenge.title}{self._game_and_map()}", "dim")
         if self.announcer:
             self._announce(await self.announcer.introduce(len(self.entrants), self.challenge.title,
                                                           self.entrant.facts))
@@ -456,7 +508,8 @@ class Arena:
         system = PROMPT_PATH.read_text(encoding="utf-8") + (
             f"\n\nYou are registered as the entrant \"{model}\" (your full model name); you don't need "
             f"to call register_entrant.")
-        self.entrant.messages = [{"role": "system", "content": system}, {"role": "user", "content": KICKOFF}]
+        kickoff = KICKOFF + self._presentation_limit()
+        self.entrant.messages = [{"role": "system", "content": system}, {"role": "user", "content": kickoff}]
         self._log("system", system)
         await self.converse(nudges=3)
 
@@ -534,6 +587,8 @@ class Arena:
                     say(f"\n{e.model}: ", "c", end="")
                     say(self._clip(text) if calls else text)  # working notes between tool calls are cut; answers aren't
                 self._log("model", text)
+                if not calls:  # an answer (its presentation, or to the audience), not notes while working
+                    self._speak_as(e.model, text)
             if not calls and text and e.submission and not e.presented:
                 self._save_presentation(e, text)
             if not calls:
@@ -542,8 +597,9 @@ class Arena:
                     continue
                 if not e.submitted and nudges > 0 and not stop:
                     nudges -= 1
-                    e.messages.append({"role": "user", "content": NUDGE})
-                    self._log("runner", NUDGE)
+                    nudge = NUDGE + self._presentation_limit()
+                    e.messages.append({"role": "user", "content": nudge})
+                    self._log("runner", nudge)
                     continue
                 say(f"    [{e.tokens:,} tokens, ${e.cost:.4f} so far]", "dim")
                 return
@@ -768,6 +824,12 @@ class Arena:
                       duration=self.challenge.time_limit, video=True, model="Tournament", countdown=True,
                       music=track, live_sound=self.show,  # the videos get the sound either way
                       position=self.position, view_fit=self.view_fit, fullscreen=self.fullscreen)
+            if self.commentator:
+                from .commentary import Commentator
+
+                job.commentary = Commentator(self.api_key, self._commentary_brief(event, now["round"], green, red, cards),
+                                             lambda line: self._announce(line, "COMMENTARY", live=True),
+                                             model=self.commentator, duration=self.challenge.time_limit)
             r = engine.run(job, name=f"cup-{info.contest_file}")
             now["game"] += 1
             now["last"] = (r.video, r.finish_time, r.video_lead) if r.video else None
@@ -988,6 +1050,7 @@ class Arena:
         self._log("model", line, e)
         say(f"\n  {seat.model} ({seat.zook_name}): ", "c", end="")
         say(line or "(no comment)")
+        self._speak_as(seat.model, line)
         return line
 
     async def match_talk(self, seats: list[tournament.Seat], context: str, enter: str,
@@ -1326,6 +1389,11 @@ def _short_name(model: str) -> str:
     return model.split("/")[-1]
 
 
+def _spaced(name: str) -> str:
+    """'TableSumo' -> 'Table Sumo' (the game's agent class names)."""
+    return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name)
+
+
 def _find_seat(seats: list, who: str):
     """The contestant meant by `who`: its full model name, the name after the '/', or its Zook's
     name, exactly, else by a prefix, else by any part of one, as long as only one matches (any case)."""
@@ -1425,6 +1493,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--voice", default=a_cfg.get("voice"),
                     help='speech voice: a Kokoro voice (default bm_george, British male; bm_lewis, bf_emma, ...) or '
                          'a system one, e.g. "Microsoft Hazel Desktop" ([arena] voice)')
+    ap.add_argument("--commentator", nargs="?", const=COMMENTATOR, default=a_cfg.get("commentator"),
+                    help=f"with --showtime --speak: live commentary on the knockout games by this vision model "
+                         f"(off unless given; --commentator alone uses {COMMENTATOR}; [arena] commentator)")
     screen = ap.add_mutually_exclusive_group()
     screen.add_argument("--monitor", action="store_true", default=bool(a_cfg.get("monitor", False)),
                         help="single-monitor mode: test and tournament games put the engine window on the right half "
@@ -1446,7 +1517,8 @@ def main(argv: list[str] | None = None) -> None:
     arena = Arena(challenge, queue, a.max_turns, a.max_tokens, a.temperature, a.auto, a.verbose, show=a.showtime,
                   announcer=None if a.no_announcer or str(a.announcer).lower() in ("", "none", "off") else a.announcer,
                   announcer_style=a.announcer_style, speak=a.speak, voice=a.voice, monitor=a.monitor,
-                  fullscreen=a.full_screen)
+                  fullscreen=a.full_screen,
+                  commentator=None if str(a.commentator).lower() in ("", "none", "off") else a.commentator)
     if not a.keep_entries and (moved := arena.archive_entries()):
         say(f"Previous Zook Entries archived to {moved}: every model starts afresh (--keep-entries to carry on).",
             "dim")

@@ -157,6 +157,17 @@ def test_sentences_join_short_ones():
     assert sentences("") == []
 
 
+def test_each_contestant_has_its_own_voice():
+    from bamzooki.voice import model_voice
+
+    assert model_voice("google/gemini-3.5-flash") == "af_heart"
+    assert model_voice("qwen/qwen3.8-max-prime") == "bf_emma"
+    assert model_voice("~openai/gpt-luna-latest") == "am_puck"
+    assert model_voice("anthropic/claude-opus-5.5", {"anthropic": "bm_lewis"}) == "bm_lewis"
+    other = model_voice("mistralai/mistral-large")
+    assert other == model_voice("mistralai/mistral-small") and other != "bm_george"
+
+
 def test_voice_picks_kokoro_for_kokoro_voices_only(monkeypatch):
     from bamzooki import voice
 

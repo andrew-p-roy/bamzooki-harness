@@ -259,6 +259,14 @@ function TimerUpdate()
 		myTrackCount = myTrackCount + 1
 		myTrack[myTrackCount] = { t = t, real = System.RealTime() - myStartReal, p = Positions() }
 		myNextTrack = t + myJob.track_interval
+		-- For live commentary: "state <sim t> <contestant>:<x>,<y>,<z> ..." about once a second after Go.
+		if myJob.state_log == 1 and myGoing ~= false and myTrackCount - 2 * Number.floor(myTrackCount / 2) == 0 then
+			local line = "state " .. String.format("%.2f", t)
+			for i, p in myTrack[myTrackCount].p do
+				line = line .. " " .. i .. ":" .. String.format("%.2f,%.2f,%.2f", p.x, p.y, p.z)
+			end
+			HLog(line)
+		end
 	end
 	if t > myJob.max_sim_time then
 		HarnessDone("timeout")

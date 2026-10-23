@@ -39,5 +39,15 @@
 # showtime = true                           # the show (extra model calls); the four below need it
 # announcer = "anthropic/claude-haiku-5.5"   # the show's host ("none" for no announcer)
 # announcer_style = "ringside"              # ringside, documentary, football, noir, or your own words
-# speak = true                              # read the announcer aloud
-# voice = "Microsoft Hazel Desktop"         # Windows voice (macOS: a `say -v` name)
+# speak = true                              # read the announcer aloud (Kokoro if installed: pip install -e .[voice])
+# voice = "bm_george"                       # the announcer: Kokoro's British male (or e.g. "Microsoft Hazel Desktop")
+# voice_speed = 1.1                         # Kokoro's pace
+# presentation_words = 120                  # with showtime: the length the models are asked to keep their
+#                                           # presentation to (a longer one is still read in full)
+# commentator = "google/gemini-3.5-flash-lite"  # live commentary on the knockout games (off unless set)
+#
+# [arena.voices]                            # --speak: the contestants' own voices, by lab or full model id
+# google = "af_heart"                       # Gemini: American female
+# qwen = "bf_emma"                          # Qwen: British female
+# openai = "am_puck"                        # GPT / Luna: American male
+# anthropic = "am_michael"                  # Claude: American male

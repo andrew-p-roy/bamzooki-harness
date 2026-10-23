@@ -108,6 +108,9 @@ class Job:
     countdown: bool = False
     countdown_size: float = 0.55  # of the window's shorter side
     music: object = None  # a music.Track looped under the game from Go, fading out at the end (audio.py)
+    # Live commentary: an object with start(run_dir) and stop() (commentary.Commentator); the driver then
+    # also logs the Zooks' positions every second.
+    commentary: object = None
     # The sound (the countdown's beeps, a beep on each count and higher on Go, and the music) is always
     # in the video; live_sound also plays it on this computer while the game runs.
     live_sound: bool = True
@@ -252,6 +255,7 @@ class Engine:
             "classes": {i + 1: c for i, c in enumerate(classes)},
             "countdown": 1 if job.countdown else 0,
             "countdown_size": job.countdown_size,
+            "state_log": 1 if job.commentary else 0,
             "window_title": f"BAMZOOKi harness - {job.contest.name}",
             "out": _posix(out),
             "log": _posix(run_dir / "driver_log.txt"),
@@ -268,11 +272,15 @@ class Engine:
         sound = MatchAudio(run_dir / "driver_log.txt", run_dir, beeps=job.countdown and job.live_sound,
                            music=job.music if job.live_sound else None)
         sound.start()
+        if job.commentary:
+            job.commentary.start(run_dir)
         try:
             status, error, wall = self._launch(args, timeout, focus, None if job.fullscreen else job.window,
                                                "none" if job.fullscreen else job.position, after_go)
         finally:
             sound.stop()
+            if job.commentary:
+                job.commentary.stop()
         raw: dict = {}
         if out.exists():
             raw = table.loads(out.read_text("latin-1"))

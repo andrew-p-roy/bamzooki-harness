@@ -643,3 +643,19 @@ def test_victory_speech_only_with_showtime():
             assert "victory speech" in e.messages[0]["content"] and len(r.seen) == 1
         else:
             assert "victory speech" not in e.messages[0]["content"] and r.seen == []  # no call made
+
+
+def test_challenger_header_names_the_game_and_map(monkeypatch):
+    from types import SimpleNamespace
+
+    from bamzooki import arena, install
+
+    a = arena.Arena.__new__(arena.Arena)
+    a.challenge = SimpleNamespace(evaluation=SimpleNamespace(contest="Zook Sumo"))
+
+    def no_install():
+        raise FileNotFoundError("no install")
+
+    monkeypatch.setattr(install.Install, "discover", staticmethod(no_install))
+    assert a._game_and_map() == "  |  game: Zook Sumo"
+    assert arena._spaced("TableSumo") == "Table Sumo"

@@ -410,6 +410,7 @@ the highlights reel with music, and the Hall of Fame prompt and `/halloffame`.
 | `--announcer-style <style>` | `ringside` (default), `documentary`, `football`, `noir`, or describe your own: `--announcer-style "a pirate captain who is new to robots"` |
 | `--speak` | read the announcer aloud (Kokoro if installed with `pip install -e .[voice]`, else Windows speech, macOS `say`, Linux `espeak`; `[arena] speak = true`) |
 | `--voice <name>` | a Kokoro voice: `bm_george` (default, British male), `bm_lewis`, `bm_daniel`, `bf_emma`, ...; or a system one, e.g. `"Microsoft Hazel Desktop"`. `[arena] voice_speed` sets Kokoro's pace (default 1.1) |
+| | With Kokoro, each model also speaks its presentation, trash talk, interview answers and replies to you in its own voice: Gemini and Qwen female, GPT and Claude male (`[arena.voices]`) |
 
 The announcer's tokens and cost are a row in the `/end` table. Everything it said is kept in
 `Transcripts/Announcer/`.
@@ -426,8 +427,15 @@ showtime = true      # the show: announcer, pre-match lines, interviews, victory
 announcer = "anthropic/claude-haiku-5.5"
 announcer_style = "ringside"
 speak = true
-voice = "bm_george"   # Kokoro (pip install -e .[voice]); or e.g. "Microsoft Hazel Desktop"
+voice = "bm_george"   # the announcer: Kokoro (pip install -e .[voice]); or e.g. "Microsoft Hazel Desktop"
 voice_speed = 1.1
+presentation_words = 120  # with showtime: the presentation length the models are asked for (read in full)
+
+[arena.voices]        # --speak: each model's own voice (by lab or full model id)
+google = "af_heart"   # Gemini: American female
+qwen = "bf_emma"      # Qwen: British female
+openai = "am_puck"    # GPT / Luna: American male
+anthropic = "am_michael"  # Claude: American male
 monitor = true       # one screen: test and tournament games on the right
 # full_screen = true # or: test and tournament games in 4:3 full screen
 ```
