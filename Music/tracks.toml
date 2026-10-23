@@ -79,3 +79,46 @@ bpm = 124.18
 loop_start = 0.12
 loop_end = 23.312  # 12 bars; fades from 29.0 s
 tags = ["sports", "triumphant", "competitive"]
+
+# Training-montage rock, after the early-80s boxing-movie sound (palm-muted power-chord chug with
+# stop-start band hits), as options. Not yet rated in analysis.json.
+
+[tracks.montage_heavy_rock]
+file = "montage_heavy_rock.mp3"
+prompt = "Early-1980s arena rock: a slow, heavy, menacing muted power-chord riff in C minor, each stab hitting together with the kick and a huge reverb snare, deep bass guitar, gritty lead guitar answering phrases, 100 BPM, tense, gritty, determined, like a fighter staring down the opponent."
+bpm = 100.76
+loop_start = 0.03
+loop_end = 28.613  # 12 bars, no fade
+tags = ["rock", "montage", "heavy", "tense"]
+
+[tracks.montage_rock_horns]
+file = "montage_rock_horns.mp3"
+prompt = "1980s boxing-movie training montage: punchy brass-section fanfare stabs over a chugging palm-muted rock guitar riff in C minor, driving bass, thunderous gated drums with tom fills, 110 BPM, triumphant and determined."
+bpm = 110.04
+loop_start = 0.05
+loop_end = 17.498  # 8 bars; the clip fades from 22.0 s
+tags = ["rock", "montage", "brass", "triumphant"]
+
+[tracks.montage_synth_rock]
+file = "montage_synth_rock.mp3"
+prompt = "1980s training-montage rock: chugging palm-muted electric guitar power chords in C minor with dramatic stop-start hits, layered with a soaring analog synth-brass lead and pulsing synth bass, big gated-reverb drums, 112 BPM, heroic underdog energy."
+bpm = 111.92
+loop_start = 0.03
+loop_end = 25.763  # 12 bars, no fade
+tags = ["rock", "montage", "heroic"]
+
+[tracks.montage_synth_riff]
+file = "montage_synth_riff.mp3"
+prompt = "1980s training-montage synth anthem: an aggressive staccato stop-start riff played on stacked analog synths and synth-brass instead of guitars, octave synth bass, LinnDrum beat with gated-reverb snare, 110 BPM, determined and triumphant."
+bpm = 109.85
+loop_start = 0.03
+loop_end = 26.248  # 12 bars; the clip fades from 26.5 s
+tags = ["synth", "montage", "determined"]
+
+[tracks.montage_hair_metal]
+file = "montage_hair_metal.mp3"
+prompt = "Mid-1980s hard-rock workout anthem: crunchy palm-muted power-chord riff with stop-start band hits, shredding overdriven guitar lead with whammy-bar dives, pounding double-time drums, 128 BPM, fast, fierce and pumped up."
+bpm = 127.7
+loop_start = 0.03
+loop_end = 30.1  # 16 bars, no fade
+tags = ["rock", "montage", "metal", "fast"]
