@@ -17,7 +17,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import manual
+from . import manual, music
 from .challenge import Challenge, ChallengeState
 from .manual import MODEL_INSTRUCTIONS
 from .runner import TRIALS, Engine, Job, contests
@@ -40,12 +40,15 @@ class Studio:
 
     def __init__(self, model: str | None = "manual", engine: Engine | None = None,
                  challenge: Challenge | None = None, position: str = "none",
-                 view_fit: tuple[float, int] | None = None, fullscreen: bool = False):
+                 view_fit: tuple[float, int] | None = None, fullscreen: bool = False, live_sound: bool = False):
         """model: the entrant's full model name (e.g. "anthropic/claude-sonnet-4.5"); its folder
         is "Zook Entries/<name with / replaced>". None = the model registers itself first.
-        position, view_fit, fullscreen: how test games (run_contest, trial) show the engine (as in Job)."""
+        position, view_fit, fullscreen: how test games and the challenge game show the engine (as in Job).
+        live_sound: the challenge game's countdown beeps and music also play on this computer (the
+        video has them either way)."""
         self.engine = engine or Engine()
         self.position, self.view_fit, self.fullscreen = position, view_fit, fullscreen
+        self.live_sound = live_sound
         self.install = self.engine.install
         self.engine.prepare()
         self.zoo = Zoo(self.install, examples_root=self.engine.root / "Teams" / "examples" / "Creatures")
@@ -358,8 +361,11 @@ class Studio:
         green, red = (mine, opp) if g.side == "green" else (opp, mine)
         if info.players == 1:
             green, red = mine, None
+        # Played like a knockout game: on screen where the test games go, with the countdown and the music.
         job = Job(info, green.path, red.path if red else None, seed=g.seed, video=True, model=self.model,
-                  duration=self.challenge.time_limit,
+                  duration=self.challenge.time_limit, position=self.position, view_fit=self.view_fit,
+                  fullscreen=self.fullscreen, countdown=True,
+                  music=music.pick_track(music.load_tracks(), self.challenge), live_sound=self.live_sound,
                   video_path=self._video_path(f"Challenge game - {self.challenge.name} - {info.name} - "
                                               f"{_short(mine)} vs {_short(opp)}"))
         with self.lock:
@@ -375,8 +381,8 @@ class Studio:
                  "fell": r.verdict.fell if r.verdict else {},
                  "video": str(r.video) if r.video else None, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
         if r.video:
-            fin = r.finish_time
-            sheet = self._sheet(r.video, [1.0, 1.0 + (fin or 10) / 2, 1.0 + (fin if fin is not None else 20), 1e9])
+            fin, go = r.finish_time, r.video_lead  # the countdown comes before Go
+            sheet = self._sheet(r.video, [go, go + (fin or 10) / 2, go + (fin if fin is not None else 20), 1e9])
             entry["stills"] = str(sheet) if sheet else None
         self.state.record_submission(entry)
         log = self.zoo.root / self.model / "results.jsonl"

@@ -358,7 +358,7 @@ class Arena:
             command=sys.executable,
             args=["-m", "bamzooki.mcp_server", "--model", model, "--challenge", str(self.challenge.path),
                   "--position", self.position] + (["--view-fit", "{},{}".format(*self.view_fit)] if self.view_fit else [])
-                 + (["--full-screen"] if self.fullscreen else []),
+                 + (["--full-screen"] if self.fullscreen else []) + (["--live-sound"] if self.show else []),
             cwd=str(self.arena_dir), env=env)
         # The server's own output (tracebacks from tools a model called wrongly) goes beside the
         # transcript, not over the audience's screen; the model still gets the error as the result.

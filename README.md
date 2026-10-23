@@ -74,8 +74,9 @@ Tips:
   - while each model presents its Zook, the Zook stands on a **turntable** in the engine (shown
     like the games: its own window, `--monitor` or `--full-screen`) until `/next`;
   - the champion gives a victory speech;
-  - knockout games play their **sound** live (Windows): a starting beeper on the countdown and the
-    match music looping under the game from Go (the videos and highlights have it either way).
+  - challenge and knockout games play their **sound** live (Windows): a starting beeper on the
+    countdown and the match music looping under the game from Go (the videos and highlights have it
+    either way).
 
   With it, `--speak` reads the announcer aloud, and `--announcer-style documentary` changes the host.
   For a natural British announcer, `pip install -e .[voice]` (Kokoro; its 340 MB model downloads on
@@ -280,7 +281,7 @@ queued challenger in turn (each presentation, and its turntable, plays out befor
 the knockout if two qualify (every game in a row, Hall of Fame yes), the champion's speech and
 the session table. With `--speak` it waits for the voice before moving on, so nothing is cut off.
 
-**Full screen (`--full-screen`).** Test and tournament games switch the display to 1024×768 (4:3)
+**Full screen (`--full-screen`).** Test, challenge and tournament games switch the display to 1024×768 (4:3)
 and run full screen; your graphics card or monitor scales that up to fill the screen, whatever its
 resolution. Whether the sides get black bars or the picture is stretched is the scaling setting in
 your graphics driver ("maintain aspect ratio" for bars). It runs at about the same speed as
@@ -289,15 +290,15 @@ and switching to it pauses the game. Without `--monitor` or `--full-screen`, eve
 engine's own window, where it opens. In every mode the window is black while a game loads (after
 a moment of white while the engine itself starts).
 
-**One screen (`--monitor`).** Test games (a model's `run_contest` and `run_trial`) and tournament
-games (`/contest`, `/exhibition`) fill the right half of the main screen with the engine window,
+**One screen (`--monitor`).** Test games (a model's `run_contest` and `run_trial`), its challenge
+game (`submit_design`) and tournament games (`/contest`, `/exhibition`) fill the right half of the main screen with the engine window,
 so the terminal can take the left half (Win+Left snaps it there). Inside the window the picture
 stays 4:3, centred with black bars, and at most 944×708 (half a 1080p screen) on bigger screens:
 capture slows the engine in proportion to the picture's pixels, and a slower engine plays less
 of each game before the real-time limit (944×708 runs at about 0.79× real time against 0.83×
 for the default window). Videos are the picture, so they stay 4:3. The window moves about 2 s
 after it opens, when the engine starts handling window messages; nothing can move it sooner.
-Challenge games, previews and replays stay as they open. Without the flag, every window stays
+Previews and replays stay as they open. Without the flag, every window stays
 where it opens (for example, on a second monitor). `tools/run_contest.py --monitor` does the same
 for one game.
 
@@ -330,7 +331,9 @@ typed while it works halts it and calls the next challenger straight away, which
 of a model that is stuck or not playing. Other commands wait until the model is done. If a model
 breaks down (an error in its run), the arena reports it and stays at the prompt.
 
-**Qualifying and `/contest`.** A model qualifies by **winning** its challenge game. When the
+**Qualifying and `/contest`.** A model qualifies by **winning** its challenge game, which is played like
+a knockout game: the "3, 2, 1, Go!" countdown and beeps, then the match music (live with `--showtime`,
+in its video either way). When the
 last challenger in the queue has finished and at least two models have qualified, the arena asks
 whether to run the contest now (`Y`/`N`). `N` leaves `/contest` for later. A draw (no
 winner by the time limit) scores 0.5 but doesn't qualify. `/contest` can be called at any point

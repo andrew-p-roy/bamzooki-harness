@@ -187,12 +187,15 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--position", choices=["right", "left", "center", "right-half", "left-half", "none"],
                     default="none",
-                    help="move the engine window for test games (run_contest, run_trial); default: where it opens")
+                    help="move the engine window for test games (run_contest, run_trial) and the challenge "
+                         "game; default: where it opens")
     ap.add_argument("--view-fit", metavar="ASPECT,MAXW",
                     help="test games keep the picture at this aspect and width cap, centred in the window "
                          "(e.g. 1.3333,944; default: the picture fills the window)")
     ap.add_argument("--full-screen", action="store_true",
-                    help="test games run in 4:3 full screen, scaled up to fill the display")
+                    help="test games and the challenge game run in 4:3 full screen, scaled up to fill the display")
+    ap.add_argument("--live-sound", action="store_true",
+                    help="the challenge game's countdown beeps and music also play live (its video has them anyway)")
     a = ap.parse_args(argv)
     view_fit = (float(a.view_fit.split(",")[0]), int(a.view_fit.split(",")[1])) if a.view_fit else None
     from ..challenge import Challenge
@@ -200,7 +203,7 @@ def main(argv: list[str] | None = None) -> None:
 
     challenge = None if a.no_challenge else Challenge.load(a.challenge or load_config().challenge)
     server = build_server(Studio(model=a.model, challenge=challenge, position=a.position, view_fit=view_fit,
-                                 fullscreen=a.full_screen))
+                                 fullscreen=a.full_screen, live_sound=a.live_sound))
     if a.http:
         server.run("streamable-http", host=a.host, port=a.port)
     else:
