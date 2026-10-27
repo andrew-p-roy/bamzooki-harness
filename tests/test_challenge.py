@@ -159,3 +159,27 @@ def test_standard_challenges_allow_5_and_50_trials():
 
     assert Challenge.load(REPO_ROOT / "challenges" / "short.toml").trials == 5
     assert Challenge.load().trials == 50
+
+
+def test_standard_challenges_have_unlimited_tests():
+    from bamzooki.config import REPO_ROOT
+
+    for c in (Challenge.load(REPO_ROOT / "challenges" / "short.toml"), Challenge.load()):
+        assert c.tests == 0 and c.describe()["budget"]["tests"] == "unlimited"
+
+
+def test_tests_have_their_own_allowance(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text(TOML.replace("runs = 2", "runs = 2\ntrials = 1\ntest = 2"))
+    c = Challenge.load(p)
+    st = ChallengeState(c, tmp_path / "m")
+    st.spend("test_zook", "free:BoxEnv: me/Z@1")
+    assert st.runs_left == 2 and st.trials_left == 1 and st.tests_left == 1  # a test uses neither
+    assert st.budget()["reminder"] == "2 of 2 test runs left. 1 of 1 trials left. 1 of 2 tests left."
+    st.spend("test_zook", "free:BoxEnv: me/Z@1")
+    assert "No tests left" in st.check("test_zook") and st.check("run_trial") is None
+    assert ChallengeState(c, tmp_path / "m").tests_used == 2  # reloaded from disk
+    p.write_text(TOML.replace("runs = 2", "runs = 2\ntest = 0"))
+    unlimited = ChallengeState(Challenge.load(p), tmp_path / "n")
+    unlimited.spend("test_zook", "x")
+    assert unlimited.check("test_zook") is None and unlimited.budget()["tests_left"] == "unlimited"

@@ -15,7 +15,7 @@ Kit's editor (buttons, dragging IK points); here you set the same options in JSO
 | Width / Height / Length, Pointiness, Flatten End, Flatten Side, Squareness | `size.*`, `shape.*` |
 | Position "Up/Down" and "Left/Right" (where a part sits on its parent) | `attach.elevation`, `attach.around` |
 | Twist, rotation "Up/Down" and "Left/Right" | `rotate.twist`, `rotate.up_down`, `rotate.left_right` |
-| Mirror | `"mirror": true` (+ `mirror_phase`) |
+| Mirror | `"mirror": true` (+ `mirror_phase`, `mirror_side` for the twin's own Movement Cycle / Type) |
 | Movement Mode: No / Single part / Two part movement | `movement.type`: none / single / double |
 | IK points (the movement path) | `movement.ik_points` |
 | Movement Type: Auto / Left side / Right side / Always | `movement.side` |
@@ -74,6 +74,10 @@ Every other part hangs off a parent:
    - `elevation` (−90..90°): 0 = the parent's "equator"; **positive = the lower half**,
      negative = the upper half; ±90 = directly below/above.
    - For a child of a child, these angles are in the *parent's* own frame (which may be rotated).
+     A part's own front is the far end of its `length`, so **`around` 0, `elevation` 0 puts the
+     child on the tip of its parent**. That's how you chain parts end to end, as the manual
+     builds a spider's leg by adding a blob to the end of another: a shin on the end of a thigh,
+     a foot on a shin, the next segment of a worm.
 2. **Which way it points** (`rotate`). With all rotations 0, the child sticks straight out from
    the surface along that ray, with `length` running outwards. Then:
    - `up_down` (pitch): **positive tilts it downwards**, negative upwards.
@@ -91,10 +95,28 @@ floor.
 
 ## 4. Mirroring
 
-`"mirror": true` adds a twin on the other side: `around`, `left_right` and `twist` are negated,
-and the part's whole subtree is copied with it. The part must not be on the centre line
-(`around` must not be 0). The twin can have its own stride phase (`mirror_phase`), which is
-how left and right legs alternate. Movement `side` Left/Right swaps on the twin automatically.
+`"mirror": true` adds a twin on the other side of the part's **parent** (across the parent's
+own centre line, so on a child of a child it is that parent's axis, not the body's): `around`,
+`left_right` and `twist` are negated, and the part's whole subtree is copied with it (shape,
+position, movement mode and stride path). The part must not be on the parent's centre line
+(`around` must not be 0). Parts inside a mirrored part can be mirrored too (e.g. a pair of toes
+on each foot). A twin always follows its original: change the original and the twin changes.
+For an independent copy (the Zook Kit's Copy button) just repeat the part's JSON.
+
+As in the Zook Kit, **Movement Cycle and Movement Type are not mirrored**: each twin part has its
+own. On the mirrored part *or any part inside it* you can set:
+- `mirror_phase` (0–1): the twin part's `movement.phase`. Default: the same as the original's.
+  This is how left and right legs alternate (`phase` 0, `mirror_phase` 0.5).
+- `mirror_side`: the twin part's `movement.side`. Default: "Left side"/"Right side" swapped,
+  "Auto"/"Always" unchanged.
+
+Set them on the part that actually moves. For a two-part leg that's the **lower (double) part**,
+not the thigh you mirrored:
+
+```json
+{"name": "Thigh", "attach": {"around": 90, "elevation": 30}, "rotate": {"up_down": 40}, "mirror": true,
+ "children": [{"name": "Shin", "movement": {"type": "double", "phase": 0}, "mirror_phase": 0.5}]}
+```
 
 ## 5. Joints and muscles
 
@@ -133,14 +155,27 @@ Zook load slowly.
 ### double: a two-part limb (thigh + shin)
 Set `movement.type: "double"` on the **lower** part (the shin). Its parent (the thigh) bends
 with it, and the knee is solved by inverse kinematics. Rules: the parent must not be the root
-and must not move by itself, and a parent can have only one double child. Here `ik_points` are
+and must not move by itself, and a parent can have only one double child. The limb's `phase`
+(and `side`) are the shin's; the thigh's are ignored. Here `ik_points` are
 **foot target offsets in the Zook's body frame** (x sideways, y up, z forward), in units,
 relative to where the foot (the shin's tip) rests. They are *not* mirrored for twins, so keep x ≈ 0
 for symmetric gaits. Default: `[[0,0,0],[0,0,0.5],[0,0.5,0],[0,0,-0.5]]` (rest → forward
 0.5 → lifted 0.5 → back 0.5). Larger z swings = longer strides; larger y = higher lift. As the
-manual stresses, **the foot must go below the bottom of the Zook** during the pushing part of the
-path, or it never grips the floor (use negative y on the ground stroke). Points may lie beyond the
-leg's reach; a leg with a bigger knee bend can reach further.
+manual stresses, **the foot must reach the floor** during the pushing part of the path, or it
+never grips. y = 0 is the foot's rest height: if the feet are the lowest point of the Zook at
+rest, y ≈ 0 is on the floor; if something else is lower, the ground stroke needs negative y.
+Points may lie beyond the leg's reach; a leg with a bigger knee bend can reach further. The
+same timing rule as single paths applies (more points = slower there).
+- **Reference:** the example Spider (the fastest and best pusher) uses
+  `[[0,0,0],[0,0,0.8],[0,1,0.05],[0,0.18,-0.8]]` on all eight legs: a 1.6-unit stride and a
+  1-unit lift. Its feet are its lowest points, so its ground stroke is at y ≈ 0. Its gait is
+  `cycle_speed` 0.8, `turn_sharpness` 1.
+- **Which way round (verified):** read in list order, Spider's foot moves to +z while low,
+  lifts, and comes back to −z, like the Zook Kit's default path. Write your loop the same way
+  round. In sprint trials Spider's path gives 55 cm/s. The same points in reverse order give
+  7 cm/s (and walk backwards with the default steering), and the path with z signs flipped
+  gives 2 cm/s. So if a two-part Zook walks badly, check the loop runs this way; don't just
+  flip signs.
 
 ### Steering (all contests steer you)
 Zooks only ever move towards a target on the floor (manual). To turn, like you walking in a
@@ -160,28 +195,74 @@ A Zook whose propelling limbs are all on the centre line, or all "Always", can't
   movement paths and balance are right.
 
 ### Targeting (spines, heads, antennae)
-`movement.targeting` turns a part relative to the target, up to `targeting_angle` degrees.
-Per the manual: **"Normal" moves the part away from the target, "Inverted" moves it towards
-the target**, and "Off" (default) does nothing. The manual suggests it for snakes and worms with
-a flexible spine (see the example Wormthing) and for eyes or antennae that point at the target.
-(The root's `gait.targeting_angle` is the Zook Kit's master setting for the same angle.)
+`movement.targeting` turns a part relative to the target. Per the manual: **"Normal" moves the
+part away from the target, "Inverted" moves it towards the target**, and "Off" (default) does
+nothing. The manual suggests it for snakes and worms with a flexible spine (see the example
+Wormthing) and for eyes or antennae that point at the target. How far the parts turn is the
+**root's `gait.targeting_angle`** (0–90°, the Zook Kit's "Part Targeting Angle"), one setting for
+the whole Zook; a higher number turns them more. (Per-part `movement.targeting_angle` and
+`movement.target_angle` exist in the genome but the engine ignores them.)
 
 ### Body wave (worms, swimmers)
 `movement.wave` (0–1) makes a part's joint sway side to side once per cycle, timed by its
 `phase`. A chain of body segments with waves and staggered phases (0, 0.2, 0.4, …) slithers.
-The Zook Kit's UI doesn't offer this, but the engine supports it (Series-1 Zooks use it).
+The Zook Kit's UI doesn't offer this, but the engine supports it (Series-1 Zooks use it). The
+example Wormthing doesn't use it: see the worm recipe in section 7 for the Zook Kit way.
 
 ## 7. Gait recipes
 
-- **Quadruped trot** (diagonal pairs together): front leg `phase 0, mirror_phase 0.5`,
-  back leg `phase 0.5, mirror_phase 0`.
-- **Hexapod tripod** (very stable): front and back legs `phase 0 / mirror_phase 0.5`, middle
-  legs `phase 0.5 / mirror_phase 0`.
-- **Hopper / bounder:** all legs the same phase (untested here: try it with a sprint trial).
-- **Worm:** 4–8 body segments in a chain (each a child of the previous one, attached at the
-  back, `around` 180), each with `wave` 0.2–0.4 and phases stepping by 0.15–0.25.
+Phases go on the moving part of each leg (the shin of a two-part leg, see section 4). The cycle
+wraps: phase 1.0 is the same moment as 0.
+
+### Alternating walk: the usual way, for any number of leg pairs
+Like a real animal (the manual: "if you tried to move both your feet at the same time you'd fall
+over"), each leg is **half a cycle off its neighbour on the same side and off its twin across
+the body**. Going from the front pair to the back:
+
+| Pair (front → back) | One side (`phase`) | Other side (`mirror_phase`) |
+|---|---|---|
+| 1 | 0 | 0.5 |
+| 2 | 0.5 | 0 (= 1) |
+| 3 | 0 | 0.5 |
+| 4 | 0.5 | 0 |
+
+So at any moment half the legs push, in diagonal groups, while the other half swing forward.
+- With 2 pairs this is the **trot** (the manual's dog: front-left and back-right together).
+- With 3 pairs it is the **tripod** (front and back on one side + middle on the other): very
+  stable.
+- The example Spider does exactly this with 8 two-part legs: its shins front to back are
+  0.5 / 0 / 0.5 / 0 on one side and 0 / 0.5 / 0 / 0.5 on the other. **Verified:** with every
+  twin in step with its original instead, Spider's sprint drops from 55 to 50 cm/s.
+
+```json
+"children": [
+ {"name": "Leg1", "attach": {"around": 45, "elevation": 30}, "rotate": {"up_down": 40}, "mirror": true,
+  "children": [{"name": "Shin1", "movement": {"type": "double", "phase": 0}, "mirror_phase": 0.5}]},
+ {"name": "Leg2", "attach": {"around": 80, "elevation": 30}, "rotate": {"up_down": 40}, "mirror": true,
+  "children": [{"name": "Shin2", "movement": {"type": "double", "phase": 0.5}, "mirror_phase": 0}]}
+]
+```
+For single-part legs put `phase` / `mirror_phase` on the leg itself.
+
+### Other gaits
+- **Bound / gallop** (the manual's running dog "leaps", front legs together then back legs):
+  front pair `phase 0, mirror_phase 0`, back pair `phase 0.5, mirror_phase 0.5`. *(untested
+  here: compare it with the alternating walk in a sprint trial.)*
+- **Hopper:** all legs the same phase *(untested)*.
+- **Ripple** (centipedes, many legs): step the phase along each side, e.g. 0, 0.2, 0.4, … from
+  front to back, with each twin 0.5 off *(untested)*.
+- **Worm** (the example Wormthing, 12 body segments): a chain of segments, each attached to
+  the tip of the previous one (`around` ≈ 0, see section 3), about 1 wide, 0.45 high and 0.63
+  long. Every segment but the last has single-part movement with a 2-point up/down path,
+  `[[0,0.3,0.55],[0,-0.3,0.55]]` (a nod of about ±30°), and phases step about 0.1 along the
+  chain (0, 0.1, … 1.0), so a full cycle runs from one end to the other. Pairs of segments
+  alternate between Part Targeting "Normal" and "Off" (the manual's flexible spine), with the
+  root's `gait.targeting_angle` at 17. Each segment also carries a small mirrored side part
+  with no movement.
 - Study the example Zooks (table in section 1) with `get_zook`; Spider is the fastest and the
-  best pusher, which makes it a good reference for a strong all-rounder.
+  best pusher, which makes it a good reference for a strong all-rounder. **Learn from them, but
+  don't copy them:** your Zook must be your own design, built from scratch. Borrow ideas (a leg
+  construction, a stride path, a gait pattern), not an example's spec.
 
 ## 8. What wins
 
@@ -200,14 +281,16 @@ The Zook Kit's UI doesn't offer this, but the engine supports it (Series-1 Zooks
 
 ## 9. Testing strategy: you choose every game
 
-**Contests use test runs; trials have their own, larger allowance.** `get_challenge` shows your
-test runs (usually 20), your trials (usually 50) and which tools use runs (`counted_tools`): in
-the standard challenges only `run_contest` does. Every result tells you how many are left. **Each game is exactly one game, and
+**Contests use test runs; tests and trials don't.** `test_zook` is the Zook Kit's Test button
+and is unlimited in the standard challenges, so test every design and every tweak. Trials have
+their own, larger allowance (usually 50). `get_challenge` shows your test runs, tests, trials
+and which tools use runs (`counted_tools`): in the standard challenges only `run_contest` does. Every result tells you how many are left. **Each game is exactly one game, and
 you decide which** through the tool's arguments. Picking the games that teach you the most is
 part of the challenge.
 
 | Tool | One game = | You choose |
 |---|---|---|
+| `test_zook(ref, duration)` | the Zook Kit's Test button: one Zook walks to a target in BoxEnv (plain, no obstacles) | which Zook, and how long: `duration` 1–30 s (default 10; a few seconds shows whether it walks) |
 | `run_trial(ref, trial)` | one Zook Kit trial for one Zook | which Zook (`ref`), which trial: `sprint`, `hurdles`, `lap`, `block_push`, `high_jump`, or `free:<Env>` with a `duration` |
 | `run_contest(contest, green, red, seed)` | one contest between two Zooks | which contest, which Zook plays green and which plays red, and the `seed` |
 
@@ -225,19 +308,23 @@ part of the challenge.
 - **Seeds:** the same seed gives exactly the same game. Re-running the same game with the same
   seed teaches you nothing; change the seed to check that a result wasn't luck.
 - **Free (no run used):** `save_zook`, `edit_zook`, `preview_zook`, `get_zook`, `validate_zook`,
-  and all the reference tools. `run_trial` doesn't use a run either, but trials are limited
-  (their own allowance). Look at the pictures, and trial your designs, before spending a contest.
+  and all the reference tools. `test_zook` (unlimited in the standard challenges) and
+  `run_trial` (its own allowance) don't use a run either. Look at the pictures, and test your
+  designs, before spending a contest.
 - **Colours:** in contests "green" and "red" are just the two arena sides. The final evaluation
   game in `get_challenge` says which side your submitted Zook plays, so test on that side.
 
 A sensible plan:
-1. Design, `save_zook` and check the pictures (free). Is it standing on its legs, with the legs
-   pointing down?
-2. `run_trial` sprint (a trial): does it walk forwards, how fast, does it drift or fall? If it goes
-   backwards, fix the stride path (section 6) and re-test.
+1. Design your own Zook, `save_zook` and check the pictures (free). Is it standing on its legs,
+   with the legs pointing down?
+2. `test_zook` (unlimited): does it walk forwards, how fast, does it drift or fall? If it goes
+   backwards, fix the stride path (section 6) and re-test. Then `run_trial` sprint for the Zook
+   Kit's own speed figure.
 3. Trials that match the challenge: e.g. `block_push` or `free:StrongEnv` for pushing
-   contests, `hurdles` for obstacles. Try several clearly different configurations (body plan,
-   leg count and placement, gait settings), compare their trial numbers, and refine the best.
+   contests, `hurdles` for obstacles. Experiment: try several clearly different configurations
+   (body plan, leg count and placement, one- or two-part legs, stride paths, gait settings),
+   including bold ones, and compare their trial numbers. Then tweak the best one setting at a
+   time, testing each change and keeping it only if it helps.
 4. `run_contest` (uses a run) against the opponent you must beat, on your evaluation side. If you
    lose, read the stats and stills (did you fall off, get pushed, walk the wrong way?), change
    one thing with `edit_zook`, and play the next game: against the target again, or new version

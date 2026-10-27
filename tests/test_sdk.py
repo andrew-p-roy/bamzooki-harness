@@ -89,6 +89,60 @@ def test_from_spec_mirrors_and_phases():
     assert z.name == "Testy"
 
 
+def test_twin_phase_and_side_inside_mirrored_subtree():
+    # Movement Cycle / Type are per part in the Zook Kit: a two-part leg alternates on the shin.
+    shin = leg(around=0, movement={"type": "double", "phase": 0.1, "side": "Left side"},
+               mirror_phase=0.6, mirror_side="Always")
+    z = Zook.from_spec(spec(leg(around=90, mirror=True, children=[shin])))
+    a, b = z.root_part.findall("bodysolid")
+    (sa,), (sb,) = a.findall("bodysolid"), b.findall("bodysolid")
+    assert (sa.attrs["leg_phase"], sb.attrs["leg_phase"]) == ("0.1", "0.6")
+    assert (sa.attrs["ik_side"], sb.attrs["ik_side"]) == ("Left side", "Always")
+    assert a.attrs["leg_phase"] == b.attrs["leg_phase"]  # the thigh keeps its own
+    # around 0 is stored like the Zook Kit's slider does, so the twin's single-part path is mirrored
+    assert (sa.attrs["phi"], sb.attrs["phi"]) == ("0.001", "-0.001")
+    back = z.to_spec()["body"]["children"][0]
+    assert "mirror_phase" not in back and "attach" not in back["children"][0]
+    assert back["children"][0]["mirror_phase"] == 0.6 and back["children"][0]["mirror_side"] == "Always"
+
+
+def test_twin_side_swaps_by_default():
+    z = Zook.from_spec(spec(leg(movement={"type": "single", "side": "Left side"}, mirror=True)))
+    a, b = z.root_part.findall("bodysolid")
+    assert (a.attrs["ik_side"], b.attrs["ik_side"]) == ("Left side", "Right side")
+    assert "mirror_side" not in z.to_spec()["body"]["children"][0]
+
+
+@pytest.mark.parametrize("s, msg", [
+    (spec(leg(mirror_phase=0.5)), "only for a mirrored part or a part inside one"),
+    (spec(leg(mirror=True, mirror_side="Up")), "mirror_side: one of Auto"),
+    (spec(mirror_side="Always"), "not allowed on the root"),
+])
+def test_twin_override_validation(s, msg):
+    assert any(msg in p for p in validate_spec(s)), validate_spec(s)
+
+
+def test_mirror_phase_on_still_part_warns():
+    from bamzooki.sdk.zook import spec_warnings
+
+    thigh_phase = spec(leg(mirror=True, mirror_phase=0.5, children=[leg(movement={"type": "double"})]))
+    assert validate_spec(thigh_phase) == []
+    assert any("no effect" in w for w in spec_warnings(thigh_phase))
+    assert spec_warnings(spec(leg(mirror=True, children=[leg(movement={"type": "double"}, mirror_phase=0.5)]))) == []
+
+
+def test_raw_gait_values_read_as_sliders():
+    # Older Zooks store Evo's raw values (IKspeed = 0.03 x Cycle Speed, ...) without the sliders.
+    z = Zook.from_spec(spec())
+    root = z.root_part
+    for k in ("zook_speed", "turn_sharpness", "turn_smoothness"):
+        del root.attrs[k]
+    root.attrs.update({"IKspeed": "0.024", "minAmplitude": "-1", "minAngle": "36"})
+    assert z.to_spec()["body"]["gait"] == {"cycle_speed": 0.8, "turn_sharpness": 1.0, "turn_smoothness": 0.2}
+    root.attrs["zook_speed"] = "0.3"  # a slider, when present, is what Evo uses
+    assert z.to_spec()["body"]["gait"]["cycle_speed"] == 0.3
+
+
 def test_from_spec_rejects_invalid():
     with pytest.raises(SpecError):
         Zook.from_spec(spec(size={"width": 9}))
@@ -121,7 +175,11 @@ def test_examples_through_spec(install):
         z = Zook.load(p, install.zook_key)
         s = z.to_spec()
         assert validate_spec(s) == [], p
-        assert Zook.from_spec(s).part_count() == z.part_count()
+        back = Zook.from_spec(s)
+        assert back.part_count() == z.part_count()
+        # every part's Movement Cycle survives, twins inside mirrored subtrees included
+        phases = lambda zk: sorted(round(float(e.attrs.get("leg_phase", 0)), 2) for e in zk.root_part.iter("bodysolid"))
+        assert phases(back) == phases(z), p
 
 
 @pytest.mark.install

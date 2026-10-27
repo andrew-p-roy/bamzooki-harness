@@ -9,10 +9,18 @@ description = """
 Design a Zook that beats Spider, the game's best example Zook, at Zook Sumo: push it off the
 raised round table (or survive while it falls off) without leaving the table yourself.
 
-Trials don't use your test runs: you have up to 5 of them. run_trial plays one of the Zook Kit's
-trials for one of your Zooks ("sprint" to check it walks forwards and how fast, "block_push" to
-measure pushing power, or free play in an environment such as "free:StrongEnv"). Use them: try
-several clearly different designs, compare them on trials, and refine the best on the evidence.
+Tests are unlimited: test_zook is the Zook Kit's Test button (your Zook walks to a target in the
+plain BoxEnv test environment). Use it as often as you like, after every design and every tweak,
+to see how it moves.
+
+Trials don't use your test runs either: you have up to 5 of them. run_trial plays one of the
+Zook Kit's trials for one of your Zooks ("sprint" to check it walks forwards and how fast,
+"block_push" to measure pushing power, or free play in an environment such as
+"free:StrongEnv"). Use them: try several clearly different designs and bold ideas, compare them
+on trials, and refine the best on the evidence.
+
+Design your own Zook: don't copy an example Zook (whole or with small tweaks). Study them for
+ideas, then build your own from scratch.
 
 Contests are limited: each test run is exactly ONE run_contest game, with the two Zooks and the
 seed given as arguments. The opponent can be any example Zook (Spider, Ant, Leapsa, Scrabber,
@@ -29,6 +37,7 @@ evaluation seed is secret, so make sure your design wins robustly, not just on o
 runs = 3                                 # test runs (contests, one game each) per model; 0 = unlimited
 counts = ["run_contest"]                 # tools that use a run
 trials = 5                               # run_trial games, besides the runs (0 = unlimited)
+test = 0                                 # test_zook games: the Zook Kit's Test button (0 = unlimited)
 submissions = 1                          # how often submit_design may be called
 
 [scoring]

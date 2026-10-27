@@ -214,6 +214,9 @@ games are deterministic, so a model that knows the seed can simply rehearse the 
 arguments: a trial for one of its Zooks, or one contest with the two Zooks and the seed it picks.
 Trials don't use test runs; they have their own allowance (`trials` in `[budget]`; only
 `run_contest` is in `counts`), so models are encouraged to compare different designs on them.
+`test_zook` is the Zook Kit's Test button (the Zook walks to the Builder's target in BoxEnv, for
+the 1–30 s the model chooses) on a third allowance, `test` in `[budget]`: 0 (unlimited) in the
+standard challenges, so models can check every design and tweak.
 Contests use the test runs, and which ones to play is its testing strategy. Every result reminds
 the model how many runs and trials are left. In its tests a model can only use the example Zooks
 and its own designs; other models' designs are hidden and can't be referenced. Progress is kept
