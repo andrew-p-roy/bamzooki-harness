@@ -25,21 +25,24 @@ runs on the user's screen. Start with get_challenge: it states your task, how ma
 you have and the one game your final design will be judged on (submit_design). If it says you
 aren't registered, call register_entrant with your full model name first.
 
-You choose every game: run_trial (one Zook Kit trial for one of your Zooks: sprint, block_push,
+You choose every game: test_zook (the Zook Kit's Test button: one Zook walks to a target in the
+plain test environment), run_trial (one Zook Kit trial for one of your Zooks: sprint, block_push,
 ...) or run_contest (one contest; you pick the contest, the two Zooks and the seed). get_challenge
-says which of them use your limited test runs: in the standard challenges only contests do, and
-trials have their own, larger allowance, so use trials to compare different designs and refine on
-the evidence.
+shows the budgets: in the standard challenges test_zook is unlimited, trials have their own,
+larger allowance, and only contests use your limited test runs. So test every design and tweak,
+experiment with clearly different designs, and refine on the evidence.
 Opponents can be any example Zook or your own earlier designs, including two of your versions
 against each other. Every counted result tells you how many runs are left. Saving and previewing
 are free. Typical loop:
   1. get_design_guide (once) and list_contests / get_contest for the rules.
-  2. get_zook an example ("Ant", "Spider", ...) to see a working design.
+  2. get_zook an example ("Ant", "Spider", ...) to see a working design. Learn from it, but
+     don't copy it: design your own Zook from scratch.
   3. save_zook your design (JSON spec). The game's own Zook Kit code lays it out, clamps
      out-of-range values, computes its size/weight, and you get preview images back.
-  4. Spend runs on the games that tell you most: e.g. run_trial "sprint" to check it walks
-     forwards, then run_contest against the opponent you must beat, or your new version against
-     your previous one. Read the verdict and stats, look at the stills, improve with edit_zook.
+  4. test_zook after every change to see how it walks, and run_trial ("sprint", "block_push",
+     free play...) to measure it. Spend runs on the contests that tell you most: against the
+     opponent you must beat, or your new version against your previous one. Read the verdict and stats, look at the
+     stills, improve with edit_zook.
   5. submit_design your best design when you're done (or when your runs are used up).
 Refs: "Spider" (example), "MyZook" (your latest version), "MyZook@2" (a version).
 Contests are deterministic for a given seed.
@@ -63,12 +66,16 @@ def build_server(studio: Studio) -> MCPServer:
     server = MCPServer(name="bamzooki", title="BAMZOOKi Zook lab", instructions=INSTRUCTIONS)
     counted = studio.challenge.counts if studio.challenge else ()
     trials = studio.challenge.trials if studio.challenge else 0
+    tests = studio.challenge.tests if studio.challenge else 0
 
     def cost(tool: str) -> str:
         if tool in counted:
             return "Uses one test run; the result shows runs left."
         if tool == "run_trial" and trials:
             return f"Doesn't use a test run: trials have their own allowance ({trials}); the result shows how many are left."
+        if tool == "test_zook":
+            return (f"Doesn't use a test run or a trial: tests have their own allowance ({tests})." if tests else
+                    "Unlimited: doesn't use a test run or a trial, so test as often as you like.")
         return "Free: doesn't use a test run."
 
     @server.tool(description="Tell the arena who you are: your FULL model name (e.g. 'anthropic/claude-sonnet-4.5'). "
@@ -165,6 +172,15 @@ def build_server(studio: Studio) -> MCPServer:
                              "a sheet of stills. Faster than a contest (~10-30 s). " + cost("run_trial"))
     def run_trial(ref: str, trial: str = "sprint", duration: float = 20.0, video: bool = True) -> list:
         r = studio.trial(ref, trial, duration=duration, video=video)
+        return _with_images(r, {"stills (start | 1/3 / 2/3 | end)": r.get("stills")})
+
+    @server.tool(description="Quick test, the Zook Kit's Test button: your Zook (`ref`) walks towards a target in "
+                             "BoxEnv, the plain test environment with no obstacles. You choose how long it runs: "
+                             "`duration` 1-30 seconds (default 10); a few seconds is enough to see whether it walks. "
+                             "Returns speed, drift, height and whether it fell, plus a sheet of stills. Use it after "
+                             "every design and tweak to see how it moves. " + cost("test_zook"))
+    def test_zook(ref: str, duration: float = 10.0, video: bool = True) -> list:
+        r = studio.test(ref, duration=duration, video=video)
         return _with_images(r, {"stills (start | 1/3 / 2/3 | end)": r.get("stills")})
 
     @server.tool(description="Your most recent contest results (newest last).")

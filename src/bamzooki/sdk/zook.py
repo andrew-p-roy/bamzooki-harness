@@ -51,15 +51,37 @@ def _r(v):
     return round(v, 4) if isinstance(v, float) else v
 
 
-def _part_to_spec(el: Element, where: str, compact: bool) -> dict:
+# Older Zooks (Spider, Twigger, Wormthing...) store the engine's raw gait values instead of the
+# Master IK Control sliders; Evo uses a raw value only when its slider is missing (Evo.sax.lua).
+RAW_GAIT = {"zook_speed": ("IKspeed", lambda v: v / 0.03),
+            "turn_sharpness": ("minAmplitude", lambda v: (1 - v) / 2),
+            "turn_smoothness": ("minAngle", lambda v: v / 180)}
+
+
+def _effective_attrs(el: Element, where: str) -> dict[str, str]:
+    attrs = dict(el.attrs)
+    if where == "root":
+        for slider, (raw, to_slider) in RAW_GAIT.items():
+            if slider not in attrs and raw in attrs:
+                attrs[slider] = genome._fmt(min(1.0, max(0.0, to_slider(_num(attrs[raw])))))
+    return attrs
+
+
+def _part_to_spec(el: Element, where: str, compact: bool, specs: dict | None = None) -> dict:
+    """specs collects id(element) -> spec for every part folded into this one (for twin overrides)."""
+    specs = {} if specs is None else specs
     spec: dict = {}
+    specs[id(el)] = spec
     if el.attrs.get("name"):
         spec["name"] = el.attrs["name"]
     spec["mesh"] = el.attrs.get("mesh", "Blob")
+    attrs = _effective_attrs(el, where)
     for p in params_for(where):
-        if p.attr not in el.attrs:
+        if p.attr not in attrs:
             continue
-        value = _r(p.from_attr(el.attrs[p.attr]))
+        value = _r(p.from_attr(attrs[p.attr]))
+        if p.attr == "phi" and 0 < value <= 0.001:
+            value = 0.0  # the builder's stand-in for 0 (see _Builder.part)
         if compact and value == p.default:
             continue
         spec.setdefault(p.group, {})[p.key] = value
@@ -80,17 +102,30 @@ def _part_to_spec(el: Element, where: str, compact: bool) -> dict:
         if i in used:
             continue
         twin = _find_twin(kids, i, used)
-        cs = _part_to_spec(k, "child", compact)
+        cs = _part_to_spec(k, "child", compact, specs)
         if twin is not None:
             used.add(twin)
             cs["mirror"] = True
-            tp = _r(_num(kids[twin].attrs.get("leg_phase")))
-            if tp != _r(_num(k.attrs.get("leg_phase"))):
-                cs["mirror_phase"] = tp
+            _twin_overrides(k, kids[twin], specs)
         children.append(cs)
     if children:
         spec["children"] = children
     return spec
+
+
+def _twin_overrides(original: Element, twin: Element, specs: dict) -> None:
+    """Movement Cycle and Movement Type are per part in the Zook Kit, not shared with the mirror:
+    record where each twin part differs as mirror_phase / mirror_side on the original's spec."""
+    for o, t in zip(original.iter("bodysolid"), twin.iter("bodysolid")):
+        s = specs.get(id(o))
+        if s is None:  # a nested twin, folded into its own original
+            continue
+        tp = _r(_num(t.attrs.get("leg_phase")))
+        if tp != _r(_num(o.attrs.get("leg_phase"))):
+            s["mirror_phase"] = tp
+        side = t.attrs.get("ik_side", "Auto")
+        if side != _mirror_value("ik_side", o.attrs.get("ik_side", "Auto")):
+            s["mirror_side"] = side
 
 
 def _shape_signature(el: Element) -> tuple:
@@ -138,6 +173,10 @@ class _Builder:
         for k, v in spec.get("legacy", {}).items():
             el.set(k, v)
         if where == "child":
+            # The Zook Kit never stores phi = 0 ("it will screw up mirroring stuff"): a twin's
+            # single-part path is mirrored only when its phi is negative.
+            if abs(_num(el.attrs["phi"])) < 0.001:
+                el.set("phi", 0.001)
             el.set("powered", "true")
             el.add("cardanconnector")
         else:
@@ -161,15 +200,27 @@ class _Builder:
         return el
 
     def twin(self, original: Element, spec: dict) -> Element:
-        """Mirror copy: same mirror groups, around/twist/left_right negated, own phase."""
+        """Mirror copy: same mirror groups, around/twist/left_right negated, and each part's own
+        mirror_phase / mirror_side (anywhere in the subtree) as the twin part's phase / side."""
         tw = copy.deepcopy(original)
         for node in tw.iter("bodysolid"):
             for attr in ("phi", "yaw", "roll", "ik_side"):
                 if attr in node.attrs:
                     node.attrs[attr] = _mirror_value(attr, node.attrs[attr])
-        if "mirror_phase" in spec:
-            tw.set("leg_phase", float(spec["mirror_phase"]))
+        _apply_twin_overrides(spec, tw)
         return tw
+
+
+def _apply_twin_overrides(spec: dict, el: Element) -> None:
+    if "mirror_phase" in spec:
+        el.set("leg_phase", float(spec["mirror_phase"]))
+    if "mirror_side" in spec:
+        el.set("ik_side", spec["mirror_side"])
+    kids = [c for c in el.children if c.tag == "bodysolid"]
+    i = 0
+    for c in spec.get("children", []):
+        _apply_twin_overrides(c, kids[i])
+        i += 2 if c.get("mirror") else 1  # skip a nested twin: it keeps its own values
 
 
 def _uid(n: int = 8) -> str:
@@ -255,12 +306,30 @@ def validate_spec(spec: dict) -> list[str]:
     body = spec.get("body")
     if not isinstance(body, dict):
         return problems + ["body: required (the root part)"]
-    _validate_part(body, "body", "root", None, None, problems)
+    _validate_part(body, "body", "root", None, None, problems, False)
     return problems
 
 
+def spec_warnings(spec: dict) -> list[str]:
+    """Valid but ineffective settings: a phase on a part whose phase nothing reads."""
+    warnings: list[str] = []
+
+    def walk(p, path):
+        if not isinstance(p, dict):
+            return
+        mv = p.get("movement") if isinstance(p.get("movement"), dict) else {}
+        if "mirror_phase" in p and mv.get("type", "none") == "none" and not mv.get("wave"):
+            warnings.append(f"{path}.mirror_phase: no effect, this part doesn't move (put it on the moving "
+                            "part, e.g. the lower part of a two-part leg)")
+        for i, c in enumerate(p.get("children", []) if isinstance(p.get("children"), list) else []):
+            walk(c, f"{path}.children[{i}]")
+
+    walk(spec.get("body"), "body")
+    return warnings
+
+
 def _validate_part(p: dict, path: str, where: str, parent: dict | None, grand: dict | None,
-                   problems: list[str]) -> None:
+                   problems: list[str], in_mirror: bool) -> None:
     for k in p:
         if k not in TOP_LEVEL:
             problems.append(f"{path}.{k}: unknown key")
@@ -295,7 +364,7 @@ def _validate_part(p: dict, path: str, where: str, parent: dict | None, grand: d
                 elif not prm.min <= v <= prm.max:
                     problems.append(f"{path}.{group}.{key}: {v} outside {prm.min}..{prm.max}")
     if where == "root":
-        for bad in ("mirror", "mirror_phase", "attach", "rotate", "movement"):
+        for bad in ("mirror", "mirror_phase", "mirror_side", "attach", "rotate", "movement"):
             if bad in p:
                 problems.append(f"{path}.{bad}: not allowed on the root part")
     mv = p.get("movement", {}) if isinstance(p.get("movement"), dict) else {}
@@ -303,8 +372,15 @@ def _validate_part(p: dict, path: str, where: str, parent: dict | None, grand: d
     if p.get("mirror"):
         if abs(p.get("attach", {}).get("around", 0)) < 0.001:
             problems.append(f"{path}.mirror: needs attach.around != 0 (a part on the centre line has no other side)")
+    in_mirror = in_mirror or bool(p.get("mirror"))
+    for key in ("mirror_phase", "mirror_side"):
+        if key in p and where == "child" and not in_mirror:
+            problems.append(f"{path}.{key}: only for a mirrored part or a part inside one")
     if "mirror_phase" in p and not (isinstance(p["mirror_phase"], (int, float)) and 0 <= p["mirror_phase"] <= 1):
         problems.append(f"{path}.mirror_phase: 0..1")
+    sides = param("movement", "side", "child").choices
+    if "mirror_side" in p and p["mirror_side"] not in sides:
+        problems.append(f"{path}.mirror_side: one of {', '.join(sides)}")
     children = p.get("children", [])
     if not isinstance(children, list):
         problems.append(f"{path}.children: must be a list")
@@ -327,7 +403,7 @@ def _validate_part(p: dict, path: str, where: str, parent: dict | None, grand: d
         if not isinstance(c, dict):
             problems.append(f"{path}.children[{i}]: must be an object")
             continue
-        _validate_part(c, f"{path}.children[{i}]", "child", p, parent, problems)
+        _validate_part(c, f"{path}.children[{i}]", "child", p, parent, problems, in_mirror)
 
 
 # --- edits ------------------------------------------------------------------------------

@@ -13,6 +13,7 @@ JSON objects grouped like the Zook Kit's panels:
       "movement": {"type": "single", "phase": 0, ...},        # how it moves (not root)
       "look":   {"rgb": [1, 1, 1], "brightness": 1, "texture": "aawhite"},
       "mirror": true, "mirror_phase": 0.5,                    # add a mirrored twin (not root)
+      "mirror_side": "Right side",                            # the twin's own movement side
       "children": [ ...parts attached to this one... ]
     }
 
@@ -88,9 +89,9 @@ PARAMS: tuple[Param, ...] = (
           help="Zook Kit 'Part Targeting': Normal moves the part away from the target, Inverted towards it "
                "(per the manual); for flexible spines, eyes, antennae"),
     Param("movement", "targeting_angle", "max_spine_angle", 30.0, 0, 90, where="child",
-          help="maximum targeting angle in degrees"),
+          help="ignored by the engine (it reads the root's gait.targeting_angle); kept for round trips"),
     Param("movement", "target_angle", "min_spine_target_angle", 180.0, 0, 180, where="child",
-          help="targeting cone in degrees"),
+          help="ignored by the engine (kept for round trips)"),
     Param("movement", "wave", "spine_amplitude", 0.0, 0, 1, where="child",
           help="body-wave amplitude: the joint sways side to side in time with the stride (phase = "
                "movement.phase); chain several waving parts with staggered phases for a slithering worm. "
@@ -102,7 +103,7 @@ PARAMS: tuple[Param, ...] = (
     Param("gait", "turn_sharpness", "turn_sharpness", 0.25, 0, 1, where="root", help="how hard it turns"),
     Param("gait", "turn_smoothness", "turn_smoothness", 0.5, 0, 1, where="root", help="how smoothly it turns"),
     Param("gait", "targeting_angle", "max_spine_angle", 45.0, 0, 90, where="root",
-          help="maximum angle for parts that target"),
+          help="Zook Kit 'Part Targeting Angle': how far every targeting part turns, degrees"),
     # Colour panel
     Param("look", "brightness", "brightness", 1.0, 0, 1, help="0 dark .. 1 full colour"),
     # The Zook Kit default "bare" has no texture file in the install, and Zooks using it fail to load
@@ -112,7 +113,7 @@ PARAMS: tuple[Param, ...] = (
 
 COLOUR_ATTRS = ("colour_red", "colour_green", "colour_blue")  # look.rgb, each 0..1
 TOP_LEVEL = ("name", "mesh", "size", "shape", "attach", "rotate", "movement", "gait", "look",
-             "mirror", "mirror_phase", "children", "legacy")
+             "mirror", "mirror_phase", "mirror_side", "children", "legacy")
 # Attributes the engine recomputes or we manage ourselves.
 MANAGED = {"posx", "posy", "posz", "partId", "segment", "mirror_group", "name", "mesh", "colour",
            *COLOUR_ATTRS, "powered", "moveable", "IKspeed", "minAmplitude", "minAngle"}
@@ -143,6 +144,9 @@ def describe() -> dict:
     out["groups"].setdefault("look", {})["rgb"] = {"attr": "colour_red/green/blue", "default": [1, 1, 1],
                                                      "min": 0, "max": 1, "help": "[r, g, b], each 0..1"}
     out["mirror"] = ("true adds a mirrored twin on the other side (around/twist/left_right negated); "
-                     "children are mirrored with it. Needs around != 0. mirror_phase sets the twin's "
-                     "movement phase (default: same as phase; use phase+0.5 to alternate).")
+                     "children are mirrored with it. Needs around != 0. Movement Cycle and Movement Type "
+                     "are not mirrored: on the mirrored part or any part inside it, mirror_phase sets the "
+                     "twin part's movement.phase (default: the same; use phase+0.5 to alternate) and "
+                     "mirror_side its movement.side (default: Left/Right swapped). For a two-part leg the "
+                     "phase that counts is the lower (double) part's, so put mirror_phase there.")
     return out

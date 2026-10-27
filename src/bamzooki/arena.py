@@ -673,6 +673,10 @@ class Arena:
             m = d.get("moved") or {}
             say(f"     {d['result'].get('name')}: {d['result'].get('value')} {d['result'].get('unit')}"
                 f"  (drift {m.get('drift_deg')} deg, fell {m.get('fell')})", "g")
+        elif name == "test_zook" and d.get("moved"):
+            m = d["moved"]
+            say(f"     Test: {m.get('forward_cm_per_s')} cm/s forward over {m.get('seconds')} s"
+                f"  (drift {m.get('drift_deg')} deg, fell {m.get('fell')})", "g")
         elif name == "run_contest" and "winner" in d:
             res = (f"winner {d['winner_zook']}" if d.get("winner_zook") else
                    "draw (time limit)" if d.get("status") == "timeout" else

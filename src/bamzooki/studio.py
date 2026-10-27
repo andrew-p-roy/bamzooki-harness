@@ -24,11 +24,14 @@ from .runner import TRIALS, Engine, Job, contests
 from .runner.contests import RULES
 from .sdk import schema
 from .sdk.store import Zoo, ZookRef, entrant_folder, safe_name
-from .sdk.zook import SpecError, Zook, apply_edits, validate_spec
+from .sdk.zook import SpecError, Zook, apply_edits, spec_warnings, validate_spec
 
 DEFAULT_VIEWS = ("three_quarter", "front", "top")
 
 GUIDE_PATH = MODEL_INSTRUCTIONS / "Zook Design Guide.md"
+# The Zook Kit's Test button opens BoxEnv (Builder.sax.lua) with the Builder's ClickableTarget.
+TEST_ENV = "free:BoxEnv"
+TEST_MAX_S = 30.0  # a test lasts the model's chosen duration, up to this
 
 
 # Statuses that are real game results (count as a run; "timeout" = the game's time limit).
@@ -139,7 +142,8 @@ class Studio:
                 "stats": z.details(), "notes": info.get("notes"), "previews": info.get("previews", {})}
 
     def _texture_warnings(self, spec: dict) -> list[str]:
-        """Unknown textures render untextured (the engine tolerates them; some examples have them)."""
+        """Unknown textures render untextured (the engine tolerates them; some examples have them).
+        Also settings that have no effect (spec_warnings)."""
         warnings: list[str] = []
         known = set(self.textures())
 
@@ -154,7 +158,7 @@ class Studio:
                 walk(c, f"{path}.children[{i}]")
 
         walk(spec.get("body"), "body")
-        return warnings
+        return warnings + spec_warnings(spec)
 
     def validate(self, spec: dict) -> dict:
         problems = validate_spec(spec)
@@ -307,15 +311,23 @@ class Studio:
     def trial(self, ref: str, trial: str = "sprint", duration: float = 20.0, video: bool = True) -> dict:
         """Run a Zook Kit trial (sprint, hurdles, lap, block_push, high_jump) or free play in an
         environment ("free:SlopeEnv") on its own. Quicker feedback than a contest."""
+        return self._trial(ref, trial, duration, video, "run_trial", f"Trial {trial.replace(':', ' ')}")
+
+    def test(self, ref: str, duration: float = 10.0, video: bool = True) -> dict:
+        """The Zook Kit's Test button: the Zook walks to the Builder's target in BoxEnv, the plain
+        test environment, for as long as the model asks (TEST_MAX_S at most). On its own budget
+        ("test" in the challenge), so models can test freely."""
+        return self._trial(ref, TEST_ENV, min(max(float(duration), 1.0), TEST_MAX_S), video, "test_zook", "Test")
+
+    def _trial(self, ref: str, trial: str, duration: float, video: bool, tool: str, label: str) -> dict:
         self._need_model()
         r = self._ref(ref)
-        if self.state and (why := self.state.check("run_trial")):
+        if self.state and (why := self.state.check(tool)):
             return {"error": why, "budget": self.state.budget()}
         with self.lock:
             res = self.engine.trial(r.path, r.name, trial, duration=duration, video=video, model=self.model,
                                     position=self.position, view_fit=self.view_fit, fullscreen=self.fullscreen,
-                                    video_path=self._video_path(
-                                        f"{self._test_label()} - Trial {trial.replace(':', ' ')} - {_short(r)}"))
+                                    video_path=self._video_path(f"{self._test_label()} - {label} - {_short(r)}"))
         sheet = None
         if res.get("video"):
             d = (res.get("moved") or {}).get("seconds") or duration
@@ -327,8 +339,8 @@ class Studio:
         log = self.zoo.root / self.model / "results.jsonl"
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"kind": "trial", **out}) + "\n")
-        self._spend("run_trial", f"{trial}: {r.label}", out, res["status"] in PLAYED)
+            f.write(json.dumps({"kind": "test" if tool == "test_zook" else "trial", **out}) + "\n")
+        self._spend(tool, f"{trial}: {r.label}", out, res["status"] in PLAYED)
         return out
 
     # --- challenge -----------------------------------------------------------------------

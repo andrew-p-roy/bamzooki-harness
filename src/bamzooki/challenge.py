@@ -10,6 +10,7 @@ A challenge is a TOML file (see challenges/default.toml):
     runs = 20                        # test runs (one game each) the model may use (0 = unlimited)
     counts = ["run_contest"]         # tools that use a run
     trials = 5                       # run_trial games allowed besides the runs (0 = unlimited)
+    test = 0                         # test_zook games (the Zook Kit's Test button) allowed (0 = unlimited)
     submissions = 1                  # how many times submit_design may be called
     [scoring]
     draw = 0.5                       # points for a draw (win = 1, loss = 0)
@@ -63,6 +64,7 @@ class Challenge:
     runs: int = 20
     counts: tuple[str, ...] = ("run_contest",)  # tools that use a run
     trials: int = 0  # run_trial games allowed besides the runs, when it isn't counted as one (0 = unlimited)
+    tests: int = 0  # test_zook games (the Zook Kit's basic Test mode), config key "test" (0 = unlimited)
     submissions: int = 1
     draw_points: float = 0.0  # a draw (no winner, e.g. time limit) counts this much of a win
     time_limit: float = 120.0  # seconds of play after Go in every contest (tests and evaluation)
@@ -91,6 +93,7 @@ class Challenge:
                    runs=int(budget.get("runs", 20)),
                    counts=tuple(budget.get("counts", ("run_contest",))),
                    trials=int(budget.get("trials", 0)),
+                   tests=int(budget.get("test", 0)),
                    submissions=int(budget.get("submissions", 1)),
                    draw_points=float(raw.get("scoring", {}).get("draw", 0.0)),
                    time_limit=float(raw.get("scoring", {}).get("time_limit", 120.0)),
@@ -108,6 +111,10 @@ class Challenge:
                            **({} if "run_trial" in self.counts else
                               {"trials": self.trials or "unlimited",
                                "trials_are": "run_trial games, separate from the runs: they don't use a run"}),
+                           **({} if "test_zook" in self.counts else
+                              {"tests": self.tests or "unlimited",
+                               "tests_are": "test_zook games (the Zook Kit's Test button), separate from the "
+                                            "runs and the trials"}),
                            "submissions": self.submissions}}
 
 
@@ -117,7 +124,8 @@ class ChallengeState:
     def __init__(self, challenge: Challenge, model_dir: Path):
         self.challenge = challenge
         self.path = model_dir / f"challenge-{challenge.name}.json"
-        self.data = {"challenge": challenge.name, "runs_used": 0, "trials_used": 0, "log": [], "submissions": []}
+        self.data = {"challenge": challenge.name, "runs_used": 0, "trials_used": 0, "tests_used": 0, "log": [],
+                     "submissions": []}
         if self.path.exists():
             self.data.update(json.loads(self.path.read_text(encoding="utf-8")))
 
@@ -141,12 +149,24 @@ class ChallengeState:
     def trials_left(self) -> int | None:
         return None if not self.challenge.trials else max(0, self.challenge.trials - self.trials_used)
 
+    @property
+    def tests_used(self) -> int:
+        return self.data.get("tests_used", 0)
+
+    @property
+    def tests_left(self) -> int | None:
+        return None if not self.challenge.tests else max(0, self.challenge.tests - self.tests_used)
+
     def counts(self, tool: str) -> bool:
         return tool in self.challenge.counts
 
     def is_trial(self, tool: str) -> bool:
         """A trial on its own allowance (not counted as a run)."""
         return tool == "run_trial" and not self.counts(tool)
+
+    def is_test(self, tool: str) -> bool:
+        """A basic Zook Kit test on its own allowance (not counted as a run)."""
+        return tool == "test_zook" and not self.counts(tool)
 
     def check(self, tool: str) -> str | None:
         """Why this run may not happen, or None."""
@@ -156,6 +176,8 @@ class ChallengeState:
         if self.is_trial(tool) and self.trials_left == 0:
             return (f"No trials left: all {self.challenge.trials} are used. Test with run_contest (it uses a "
                     "test run) or submit your best design with submit_design.")
+        if self.is_test(tool) and self.tests_left == 0:
+            return f"No tests left: all {self.challenge.tests} are used. Use run_trial or run_contest instead."
         return None
 
     def spend(self, tool: str, detail: str) -> None:
@@ -163,6 +185,8 @@ class ChallengeState:
             self.data["runs_used"] += 1
         elif self.is_trial(tool):
             self.data["trials_used"] = self.trials_used + 1
+        elif self.is_test(tool):
+            self.data["tests_used"] = self.tests_used + 1
         self.data["log"].append({"tool": tool, "detail": detail, "time": time.strftime("%Y-%m-%d %H:%M:%S")})
         self.save()
 
@@ -180,6 +204,11 @@ class ChallengeState:
             out["trials_used"], out["trials_left"] = self.trials_used, "unlimited" if trials is None else trials
             if trials is not None:
                 reminders.append(f"{trials} of {self.challenge.trials} trials left." if trials else "No trials left.")
+        if "test_zook" not in self.challenge.counts:
+            tests = self.tests_left
+            out["tests_used"], out["tests_left"] = self.tests_used, "unlimited" if tests is None else tests
+            if tests is not None:
+                reminders.append(f"{tests} of {self.challenge.tests} tests left." if tests else "No tests left.")
         if reminders:
             out["reminder"] = " ".join(reminders)
         return out
@@ -194,5 +223,6 @@ class ChallengeState:
         self.save()
 
     def reset(self) -> None:
-        self.data = {"challenge": self.challenge.name, "runs_used": 0, "trials_used": 0, "log": [], "submissions": []}
+        self.data = {"challenge": self.challenge.name, "runs_used": 0, "trials_used": 0, "tests_used": 0, "log": [],
+                     "submissions": []}
         self.save()
