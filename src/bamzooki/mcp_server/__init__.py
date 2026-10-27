@@ -22,30 +22,32 @@ from ..studio import DEFAULT_VIEWS, Studio
 INSTRUCTIONS = """\
 You design creatures ("Zooks") for BAMZOOKi and test them in the real 2006 game engine, which
 runs on the user's screen. Start with get_challenge: it states your task, how many test runs
-you have and the one game your final design will be judged on (submit_design). If it says you
-aren't registered, call register_entrant with your full model name first.
+you have and the one game your final design will be judged on (submit_design). Then read that
+contest's rules with get_contest, so you know what you're designing for. If get_challenge says
+you aren't registered, call register_entrant with your full model name first.
 
 You choose every game: test_zook (the Zook Kit's Test button: one Zook walks to a target in the
 plain test environment), run_trial (one Zook Kit trial for one of your Zooks: sprint, block_push,
-...) or run_contest (one contest; you pick the contest, the two Zooks and the seed). get_challenge
+...) or run_contest (one contest; you pick the contest and the two Zooks). get_challenge
 shows the budgets: in the standard challenges test_zook is unlimited, trials have their own,
 larger allowance, and only contests use your limited test runs. So test every design and tweak,
 experiment with clearly different designs, and refine on the evidence.
 Opponents can be any example Zook or your own earlier designs, including two of your versions
 against each other. Every counted result tells you how many runs are left. Saving and previewing
 are free. Typical loop:
-  1. get_design_guide (once) and list_contests / get_contest for the rules.
+  1. get_design_guide (once) and get_contest for the rules of the contest you'll be judged on.
   2. get_zook an example ("Ant", "Spider", ...) to see a working design. Learn from it, but
-     don't copy it: design your own Zook from scratch.
+     don't copy it: save_zook refuses designs too close to an example. Design your own.
   3. save_zook your design (JSON spec). The game's own Zook Kit code lays it out, clamps
      out-of-range values, computes its size/weight, and you get preview images back.
   4. test_zook after every change to see how it walks, and run_trial ("sprint", "block_push",
      free play...) to measure it. Spend runs on the contests that tell you most: against the
-     opponent you must beat, or your new version against your previous one. Read the verdict and stats, look at the
-     stills, improve with edit_zook.
+     opponent you must beat, or your new version against your previous one. Read the verdict and
+     stats, look at the stills, improve with edit_zook.
   5. submit_design your best design when you're done (or when your runs are used up).
 Refs: "Spider" (example), "MyZook" (your latest version), "MyZook@2" (a version).
-Contests are deterministic for a given seed.
+Games aren't deterministic: the same two Zooks can get a different result each time. A design that
+only just wins a practice contest may lose the real one, so aim to win clearly and consistently.
 """
 
 
@@ -154,14 +156,14 @@ def build_server(studio: Studio) -> MCPServer:
     @server.tool(description="Play ONE contest game in the real game (on screen, up to the time limit of play). You choose the game "
                              "with the arguments: `contest` (see list_contests), `green` and `red` = the two Zooks "
                              "(each an example such as 'Spider' or one of your own designs such as 'MyZook' or "
-                             "'MyZook@2'; you can pit two of your own versions against each other), and `seed` "
-                             "(same seed = same result; change it to check a result isn't luck). Returns the "
+                             "'MyZook@2'; you can pit two of your own versions against each other). Games aren't "
+                             "deterministic: replaying the same game can give a different result. Returns the "
                              "verdict: winner by colour and Zook, scores, finish time, distance travelled, falls, "
                              "the MP4 path and a 2x2 sheet of stills (Go, halfway, the finish, the end). "
                              "Single-player contests take only green. A game with no winner by the time limit (120 s of play "
                              "after Go unless the challenge says otherwise) is a draw. " + cost("run_contest"))
-    def run_contest(contest: str, green: str, red: str | None = None, seed: int = 1, video: bool = True) -> list:
-        r = studio.run(contest, green, red, seed=seed, video=video)
+    def run_contest(contest: str, green: str, red: str | None = None, video: bool = True) -> list:
+        r = studio.run(contest, green, red, video=video)
         return _with_images(r, {"stills (Go | halfway / finish | end)": r.get("stills")})
 
     @server.tool(description="Play ONE trial: test one Zook (`ref`) on its own with the Zook Kit's built-in trials: "

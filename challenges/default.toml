@@ -8,6 +8,8 @@ music = "synth_funk"                     # the highlights reel's track (Music/tr
 description = """
 Design a Zook that beats Spider, the game's best example Zook, at Zook Sumo: push it off the
 raised round table (or survive while it falls off) without leaving the table yourself.
+Read the contest's full rules with get_contest("Zook Sumo") before you design, so you know
+exactly what your Zook has to do.
 
 Tests are unlimited: test_zook is the Zook Kit's Test button (your Zook walks to a target in the
 plain BoxEnv test environment). Use it as often as you like, after every design and every tweak,
@@ -20,17 +22,20 @@ Zook Kit's trials for one of your Zooks ("sprint" to check it walks forwards and
 on trials, and refine the best on the evidence.
 
 Design your own Zook: don't copy an example Zook (whole or with small tweaks). Study them for
-ideas, then build your own from scratch.
+ideas, then build your own from scratch. save_zook refuses a design that is too close to an
+example.
 
-Contests are limited: each test run is exactly ONE run_contest game, with the two Zooks and the
-seed given as arguments. The opponent can be any example Zook (Spider, Ant, Leapsa, Scrabber,
+Contests are limited: each test run is exactly ONE run_contest game, with the two Zooks given
+as arguments. The opponent can be any example Zook (Spider, Ant, Leapsa, Scrabber,
 Twigger, Wormthing) or one of your own earlier designs (e.g. green="MyZook@3", red="MyZook@2").
 Choosing which contests to play, against whom, is your testing strategy. Saving and previewing
 designs is free too.
 
 When you're done, call submit_design once with your best design. It plays the single
-evaluation game below (it doesn't use a test run): a win scores 1, a draw 0.5, a loss 0. The
-evaluation seed is secret, so make sure your design wins robustly, not just on one seed.
+evaluation game below (it doesn't use a test run): a win scores 1, a draw 0.5, a loss 0. Games
+aren't deterministic: the same two Zooks can get a different result each time. A design that
+only just wins a practice contest may lose the real one, so make sure it wins clearly and
+consistently.
 """
 
 [budget]
@@ -48,6 +53,5 @@ time_limit = 120                         # seconds of play after Go, every conte
 [evaluation]
 contest = "Zook Sumo"
 opponent = "Spider"
-seed = 7
+seed = 7                                 # never shown to models
 side = "green"
-reveal_seed = false                      # models know the game but not its seed (can't rehearse it)

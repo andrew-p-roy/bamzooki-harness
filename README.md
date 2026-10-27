@@ -207,11 +207,17 @@ client times out long tool calls, raise its limit (Claude Code: `MCP_TOOL_TIMEOU
 `BAMZOOKI_CHALLENGE` or `--challenge`, or run `--no-challenge` for free play). A challenge sets
 the task text, the **test-run budget** (default 20; failed engine runs are free) and the **one
 evaluation game** that `submit_design` plays (contest, opponent, seed, side; outside the budget;
-win 1, draw 0.5, loss 0). The evaluation seed is **secret** by default (`reveal_seed = false`):
-games are deterministic, so a model that knows the seed can simply rehearse the evaluation game.
+win 1, draw 0.5, loss 0). **Models never see or choose seeds**: the evaluation seed is never
+shown, and every practice contest gets a fresh random seed (kept in the operator's `results.jsonl`
+only). Games are deterministic for a seed, so a model that controlled or knew seeds could rehearse
+the evaluation game; to the models, games are simply non-deterministic.
 `challenges/short.toml` is the same task with 3 runs. Every contest in a challenge stops after
 `time_limit` seconds of play after Go, in real time (default 120, in `[scoring]`); no winner by then is a draw and the game is stopped. **Every game is one the model chooses** through the tool
-arguments: a trial for one of its Zooks, or one contest with the two Zooks and the seed it picks.
+arguments: a test or trial for one of its Zooks, or one contest with the two Zooks it picks.
+**Copying an example is refused**: `save_zook`, `edit_zook`, `validate_zook` and `submit_design`
+reject a design containing most of an example's parts nearly unchanged (`sdk.zook.likeness`:
+angles within 18°, sizes within ×0.6–×1.65, at the same place in the tree, 70% of the example's
+parts), with a message that names neither the example nor any setting.
 Trials don't use test runs; they have their own allowance (`trials` in `[budget]`; only
 `run_contest` is in `counts`), so models are encouraged to compare different designs on them.
 `test_zook` is the Zook Kit's Test button (the Zook walks to the Builder's target in BoxEnv, for
@@ -246,7 +252,7 @@ the repo:
 ```
 Zook Entries/<model>/<Name>/<n>.0.zook (+ .json, previews)   designs (spec, stats, notes)
 Zook Entries/<model>/challenge-<name>.json, results.jsonl     budget, submissions, results
-Zook Entries/<model>/Videos/Test 03 - <challenge> - <contest> - <Zook> vs <opponent> - seed 7.mp4
+Zook Entries/<model>/Videos/Test 03 - <challenge> - <contest> - <Zook> vs <opponent>.mp4
                          .../Test 04 - <challenge> - Trial sprint - <Zook>.mp4
                          .../Challenge game - <challenge> - <contest> - <Zook> vs <opponent>.mp4
                          .../Knockout Final game 1 - ... vs <opponent> (<its model>) - seed N.mp4

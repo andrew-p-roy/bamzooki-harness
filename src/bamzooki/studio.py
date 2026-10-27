@@ -11,10 +11,12 @@ Every engine call (finalise, preview, contest) runs the real game on screen, one
 from __future__ import annotations
 
 import json
+import random
 import re
 import shutil
 import threading
 import time
+from functools import cached_property
 from pathlib import Path
 
 from . import manual, music
@@ -24,7 +26,7 @@ from .runner import TRIALS, Engine, Job, contests
 from .runner.contests import RULES
 from .sdk import schema
 from .sdk.store import Zoo, ZookRef, entrant_folder, safe_name
-from .sdk.zook import SpecError, Zook, apply_edits, spec_warnings, validate_spec
+from .sdk.zook import SpecError, Zook, apply_edits, copied_example, spec_warnings, validate_spec
 
 DEFAULT_VIEWS = ("three_quarter", "front", "top")
 
@@ -32,6 +34,9 @@ GUIDE_PATH = MODEL_INSTRUCTIONS / "Zook Design Guide.md"
 # The Zook Kit's Test button opens BoxEnv (Builder.sax.lua) with the Builder's ClickableTarget.
 TEST_ENV = "free:BoxEnv"
 TEST_MAX_S = 30.0  # a test lasts the model's chosen duration, up to this
+COPY_REFUSAL = ("This design is too close to one of the example Zooks. Copying an example, whole or with "
+                "small tweaks, isn't allowed: design your own Zook, using the examples for ideas, not as a "
+                "template.")
 
 
 # Statuses that are real game results (count as a run; "timeout" = the game's time limit).
@@ -97,8 +102,8 @@ class Studio:
         c = contests.find(name, self.install)
         return {"name": c.name, "contest_file": c.contest_file, "players": c.players, "colours": c.colours,
                 "rules": RULES.get(c.contest_file, ""), "behaviours": c.behaviours,
-                "notes": "Contest starts ('Go') 4 s after the arena is built. Results are deterministic "
-                         "for a given seed."}
+                "notes": "Contest starts ('Go') 4 s after the arena is built. Games aren't deterministic: "
+                         "the same two Zooks can get a different result each time."}
 
     def textures(self) -> list[str]:
         """Texture names (no extension) from the game's team texture folders."""
@@ -162,13 +167,26 @@ class Studio:
 
     def validate(self, spec: dict) -> dict:
         problems = validate_spec(spec)
+        if not problems and self._is_copy(Zook.from_spec(spec)):
+            problems = [COPY_REFUSAL]
         return {"valid": not problems, "problems": problems, "warnings": self._texture_warnings(spec)}
+
+    @cached_property
+    def _examples(self) -> dict[str, Zook]:
+        return {n: Zook.load(self.zoo.resolve(f"examples/{n}").path, self.install.zook_key)
+                for n in self.zoo.example_names()}
+
+    def _is_copy(self, zook: Zook) -> bool:
+        return copied_example(zook, self._examples) is not None
 
     def save_zook(self, spec: dict, notes: str = "", views=DEFAULT_VIEWS) -> dict:
         self._need_model()
         problems = validate_spec(spec)
         if problems:
             return {"saved": False, "problems": problems}
+        # Which example and which settings stay unsaid, so the check can't be steered around.
+        if self._is_copy(Zook.from_spec(spec)):
+            return {"saved": False, "problems": [COPY_REFUSAL]}
         warnings = self._texture_warnings(spec)
         name = safe_name(spec["name"])
         version, out = self.zoo.new_version(self.model, name)
@@ -227,9 +245,13 @@ class Studio:
                 "error": res.get("error")}
 
     # --- contests ----------------------------------------------------------------------
-    def run(self, contest: str, green: str, red: str | None = None, seed: int = 1, video: bool = True,
+    def run(self, contest: str, green: str, red: str | None = None, seed: int | None = None, video: bool = True,
             record: bool = False, duration: float = 120.0) -> dict:
+        """One contest. Models don't choose or see seeds: each game gets a fresh random one (kept in
+        the operator's log only), so to them games vary like the real thing."""
         self._need_model()
+        if seed is None:
+            seed = random.randrange(1, 1_000_000)
         info = contests.find(contest, self.install)
         g = self._ref(green)
         rd = self._ref(red) if red else None
@@ -243,7 +265,7 @@ class Studio:
         job = Job(info, g.path, rd.path if rd else None, seed=seed, duration=duration, video=video,
                   record=record, model=self.model, position=self.position, view_fit=self.view_fit,
                   fullscreen=self.fullscreen,
-                  video_path=self._video_path(f"{self._test_label()} - {info.name} - {_short(g)}{vs} - seed {seed}"))
+                  video_path=self._video_path(f"{self._test_label()} - {info.name} - {_short(g)}{vs}"))
         with self.lock:
             r = self.engine.run(job, name=info.contest_file)
         v = r.verdict
@@ -254,7 +276,7 @@ class Studio:
             times = [1.0, 1.0 + (fin or 10) / 2, 1.0 + (fin if fin is not None else 20), 1e9]
             sheet = self._sheet(r.video, times)
         summary = {
-            "contest": info.name, "green": g.label, "red": rd.label if rd else None, "seed": seed,
+            "contest": info.name, "green": g.label, "red": rd.label if rd else None,
             "status": r.status, "winner": r.winner,
             "winner_zook": {"green": g.label, "red": rd.label if rd else None}.get(r.winner) if r.winner else None,
             "scores": r.scores, "decided_by": v.decided_by if v else None,
@@ -269,10 +291,9 @@ class Studio:
         log = self.zoo.root / self.model / "results.jsonl"
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"kind": "contest", **summary}) + "\n")
+            f.write(json.dumps({"kind": "contest", **summary, "seed": seed}) + "\n")
         vs = rd.label if rd else "-"
-        self._spend("run_contest", f"{info.name}: {g.label} vs {vs} seed {seed}", summary,
-                    r.status in PLAYED)
+        self._spend("run_contest", f"{info.name}: {g.label} vs {vs}", summary, r.status in PLAYED)
         return summary
 
     def _test_label(self) -> str:
@@ -365,6 +386,8 @@ class Studio:
         mine = self._ref(ref)
         if mine.owner != self.model:
             return {"error": "Submit one of your own designs."}
+        if self._is_copy(Zook.load(mine.path, self.install.zook_key)):
+            return {"error": COPY_REFUSAL + " It can't be submitted."}
         g = self.challenge.evaluation
         # The opponent comes from the operator's challenge file, so any Zook may be named there
         # ("Spider" = an example, "<model>/<Name>@n" = a saved design).
@@ -387,7 +410,7 @@ class Studio:
                              "used. Call submit_design again.", "status": r.status, "detail": r.error}
         outcome = "win" if r.winner == g.side else ("draw" if r.winner is None else "loss")
         score = {"win": 1.0, "draw": self.challenge.draw_points, "loss": 0.0}[outcome]
-        entry = {"design": mine.label, "game": {**g.public(), "seed": g.seed}, "outcome": outcome, "score": score,
+        entry = {"design": mine.label, "game": g.public(), "outcome": outcome, "score": score,
                  "status": r.status, "winner": r.winner, "scores": r.scores,
                  "finish_after_go_s": None if r.finish_time is None else round(r.finish_time, 2),
                  "fell": r.verdict.fell if r.verdict else {},
@@ -400,7 +423,7 @@ class Studio:
         log = self.zoo.root / self.model / "results.jsonl"
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"kind": "submission", **entry}) + "\n")
+            f.write(json.dumps({"kind": "submission", **entry, "seed": g.seed}) + "\n")
         return entry
 
     def results(self, limit: int = 20) -> list[dict]:
@@ -409,7 +432,8 @@ class Studio:
         if not log.exists():
             return []
         lines = log.read_text(encoding="utf-8").splitlines()
-        return [json.loads(x) for x in lines[-limit:]]
+        # Seeds stay in the operator's log; models never see them.
+        return [{k: v for k, v in json.loads(x).items() if k != "seed"} for x in lines[-limit:]]
 
 
 def _short(ref: ZookRef) -> str:

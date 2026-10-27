@@ -35,7 +35,7 @@ def test_default_challenge_loads():
     assert (c.evaluation.contest, c.evaluation.opponent, c.evaluation.seed) == ("Zook Sumo", "Spider", 7)
     assert c.time_limit == 120 and c.describe()["time_limit_s"] == 120
     shown = c.describe()["evaluation_game"]
-    assert shown["side"] == "green" and "secret" in str(shown["seed"])  # models can't rehearse it
+    assert shown["side"] == "green" and "seed" not in shown  # models never learn the seed
 
 
 def test_evaluation_is_one_game(challenge, tmp_path):

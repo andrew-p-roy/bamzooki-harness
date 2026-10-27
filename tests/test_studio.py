@@ -49,6 +49,24 @@ def test_mcp_tools(install):
     srv = build_server(Studio("pytest"))
     names = {t.name for t in asyncio.run(srv.list_tools())}
     assert {"get_design_guide", "list_contests", "get_zook", "save_zook", "edit_zook", "preview_zook",
-            "run_contest", "list_results"} <= names
+            "run_contest", "run_trial", "test_zook", "list_results"} <= names
     res = asyncio.run(srv.call_tool("get_contest", {"contest": "Zook Sumo"}))
     assert "raised round table" in res.content[0].text
+    # models can't choose (or see) seeds
+    contest_tool = next(t for t in asyncio.run(srv.list_tools()) if t.name == "run_contest")
+    assert "seed" not in contest_tool.input_schema["properties"]
+
+
+@pytest.mark.install
+def test_copies_of_examples_are_refused(install):
+    from bamzooki.studio import COPY_REFUSAL, Studio
+
+    st = Studio("pytest")
+    spec = st.get_zook("Spider")["spec"]
+    spec["name"] = "NotSpider"
+    for p in spec["body"]["children"]:  # stretched and recoloured: still a copy
+        p.setdefault("size", {})["length"] = min(3, p.get("size", {}).get("length", 1) * 1.3)
+        p.setdefault("look", {})["rgb"] = [0, 0, 1]
+    out = st.validate(spec)
+    assert out["problems"] == [COPY_REFUSAL] and "Spider" not in COPY_REFUSAL
+    assert st.save_zook(spec) == {"saved": False, "problems": [COPY_REFUSAL]}  # refused before the engine runs

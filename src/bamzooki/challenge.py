@@ -17,12 +17,13 @@ A challenge is a TOML file (see challenges/default.toml):
     [evaluation]                     # the ONE official game played by submit_design (not counted)
     contest = "Zook Sumo"
     opponent = "Spider"              # an example Zook ("Spider") or a saved design ("model/Name@n")
-    seed = 1
+    seed = 1                         # never shown to models
     side = "green"                   # the submitted Zook's arena colour: green or red
-    reveal_seed = false              # hide the seed so models can't rehearse the exact game
 
-Every run is a single game. Which games to play during testing (trial or contest, which
-contest, which of its Zooks against which opponent, which seed) is up to the model.
+Every run is a single game. Which games to play during testing (test, trial or contest, which
+contest, which of its Zooks against which opponent) is up to the model. Models never see or
+choose seeds: practice contests get a fresh random seed each, so games vary for them as the
+real one may.
 
 Per-model progress lives in <zoo_dir>/<model>/challenge-<name>.json, so restarting the
 server doesn't reset the budget. Reset it with: python tools/challenge.py reset --model X
@@ -47,12 +48,10 @@ class Match:
     opponent: str
     seed: int = 1
     side: str = "green"  # green | red
-    reveal_seed: bool = True  # False: models are told the game but not its seed
 
     def public(self) -> dict:
-        d = {"contest": self.contest, "opponent": self.opponent, "side": self.side}
-        d["seed"] = self.seed if self.reveal_seed else "secret (the same for every entrant)"
-        return d
+        """What models are told: the game, never its seed."""
+        return {"contest": self.contest, "opponent": self.opponent, "side": self.side}
 
 
 @dataclass
@@ -86,8 +85,7 @@ class Challenge:
         side = ev.get("side", "green")
         if side not in ("green", "red"):
             raise ValueError(f"{path}: evaluation side must be green or red")
-        match = Match(ev["contest"], ev["opponent"], int(ev.get("seed", 1)), side,
-                      bool(ev.get("reveal_seed", True)))
+        match = Match(ev["contest"], ev["opponent"], int(ev.get("seed", 1)), side)
         return cls(name=raw.get("name", path.stem), title=raw.get("title", path.stem),
                    description=raw.get("description", "").strip(), evaluation=match,
                    runs=int(budget.get("runs", 20)),

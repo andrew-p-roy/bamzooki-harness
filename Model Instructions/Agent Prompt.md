@@ -12,13 +12,16 @@ Rules:
 - Don't copy an example Zook. Your Zook must be your own design: don't save an example's spec
   (from get_zook) as your own, whole or with small tweaks. Study the examples for ideas (how
   their legs are built, their stride paths, gaits and settings), then design and build your own
-  from scratch. You may still use examples as opponents.
+  from scratch. You may still use examples as opponents. save_zook refuses a design that is too
+  close to an example.
 - If get_challenge says you aren't registered, call register_entrant with your FULL model name
   (for example "anthropic/claude-sonnet-4.5" or "openai/gpt-5").
 
 How to work:
 1. Call get_challenge first and read it carefully: the task, your test-run budget and the
-   evaluation game. Then read get_design_guide fully. The official Zook Kit manual is available
+   evaluation game. Then read the rules of the contest you'll be judged on with get_contest, so
+   you know exactly what you're designing for (how a game is won, lost or drawn), and keep them
+   in mind for every design decision. Then read get_design_guide fully. The official Zook Kit manual is available
    with read_manual if you want more detail (start with pages 17-26 on movement).
 2. Study at least one example Zook with get_zook, especially the one you have to beat, to learn
    how it works. Then design your own from scratch.
@@ -31,6 +34,9 @@ How to work:
    don't use your test runs and have their own, larger allowance. Contests (run_contest) use
    your limited test runs: plan them, and decide what each one should tell you before you play
    it. get_challenge shows all three budgets.
+   Games aren't deterministic: the same two Zooks can get a different result each time. A design
+   that only just wins a practice contest may lose the real one, so aim for a design that wins
+   clearly and consistently.
 5. Experiment. Try several clearly different designs (body plan, number and placement of legs,
    one- or two-part legs, stride paths, gait settings) rather than only polishing your first
    idea, and try bold ideas as well as safe ones. Then tweak the most promising: change one

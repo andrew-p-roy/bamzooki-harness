@@ -14,6 +14,7 @@ draft is finalised in the engine (bamzooki.runner.Engine.finalize_zook).
 from __future__ import annotations
 
 import copy
+import math
 import random
 import re
 import time
@@ -404,6 +405,69 @@ def _validate_part(p: dict, path: str, where: str, parent: dict | None, grand: d
             problems.append(f"{path}.children[{i}]: must be an object")
             continue
         _validate_part(c, f"{path}.children[{i}]", "child", p, parent, problems, in_mirror)
+
+
+# --- likeness to the example Zooks -------------------------------------------------------
+
+# A part is described by its place in the tree (depth, movement mode) and three kinds of feature,
+# each with its own tolerance. Left/right signs are dropped so mirroring a design doesn't disguise
+# it, and sizes are compared as ratios so stretching an example doesn't either.
+_ANGLES = ("theta", "phi", "roll", "pitch", "yaw")
+_SIGNLESS = {"phi", "roll", "yaw"}
+_SIZES = ("scalex", "scaley", "scalez")
+_SHAPES = ("bias", "flatness", "asymmetry", "cubosity")
+ANGLE_TOLERANCE = 18.0  # degrees
+SIZE_TOLERANCE = 0.5  # |ln(ratio)|: within about x0.6 .. x1.65
+SHAPE_TOLERANCE = 0.2  # slider units (0..1)
+COPY_THRESHOLD = 0.7  # a design containing this share of an example's parts is a copy of it
+
+
+def _part_features(zook: "Zook") -> list[tuple]:
+    out = []
+
+    def walk(el: Element, depth: int):
+        angles = tuple(abs(_num(el.attrs.get(a))) if a in _SIGNLESS else _num(el.attrs.get(a)) for a in _ANGLES)
+        sizes = tuple(math.log(max(_num(el.attrs.get(a), 1.0), 0.01)) for a in _SIZES)
+        shapes = tuple(_num(el.attrs.get(a), d) for a, d in zip(_SHAPES, (0.5, 0, 0, 0)))
+        out.append((depth, el.attrs.get("leg_type", "0"), angles, sizes, shapes))
+        for c in el.children:
+            if c.tag == "bodysolid":
+                walk(c, depth + 1)
+
+    walk(zook.root_part, 0)
+    return out
+
+
+def _part_distance(a: tuple, b: tuple) -> float | None:
+    """Worst feature difference as a fraction of its tolerance (<= 1 = a match), or None."""
+    if a[:2] != b[:2]:
+        return None
+    return max(max(abs(x - y) for x, y in zip(a[2], b[2])) / ANGLE_TOLERANCE,
+               max(abs(x - y) for x, y in zip(a[3], b[3])) / SIZE_TOLERANCE,
+               max(abs(x - y) for x, y in zip(a[4], b[4])) / SHAPE_TOLERANCE)
+
+
+def likeness(design: "Zook", example: "Zook") -> float:
+    """Share (0..1) of the example's parts that appear nearly unchanged in the design, at the same
+    depth and with the same movement mode. Extra parts in the design don't dilute it."""
+    ours, theirs = _part_features(design), _part_features(example)
+    free = list(range(len(ours)))
+    matched = 0
+    for part in theirs:
+        best, best_d = None, 1.0
+        for i in free:
+            d = _part_distance(part, ours[i])
+            if d is not None and d <= best_d:
+                best, best_d = i, d
+        if best is not None:
+            free.remove(best)
+            matched += 1
+    return matched / len(theirs) if theirs else 0.0
+
+
+def copied_example(design: "Zook", examples: dict[str, "Zook"]) -> str | None:
+    """The example this design copies (whole or lightly tweaked), or None."""
+    return next((n for n, ex in examples.items() if likeness(design, ex) >= COPY_THRESHOLD), None)
 
 
 # --- edits ------------------------------------------------------------------------------

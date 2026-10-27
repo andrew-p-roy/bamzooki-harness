@@ -191,6 +191,25 @@ def test_genome_roundtrip_examples(install):
         assert genome.dumps(genome.loads(text)) == text, p
 
 
+@pytest.mark.install
+def test_example_likeness(install):
+    from bamzooki.sdk.zook import copied_example, likeness
+
+    examples = {p.parent.name: Zook.load(p, install.zook_key) for p in install.example_zooks() if "Teams" in p.parts}
+    for name, z in examples.items():
+        assert copied_example(z, examples) == name
+        others = {n: e for n, e in examples.items() if n != name}
+        assert copied_example(z, others) is None, name  # the examples are all different designs
+        # a copy with extra parts bolted on is still a copy
+        s = z.to_spec()
+        s["body"].setdefault("children", []).extend([leg(around=180) for _ in range(5)])
+        assert likeness(Zook.from_spec(s), z) >= 0.9, name
+    # a design from scratch in the guide's style isn't
+    own = spec(*[leg(around=a, mirror=True, rotate={"up_down": 50}, movement={"type": "single"}) for a in (45, 90, 135)],
+               size={"width": 1.5, "height": 0.8, "length": 2})
+    assert copied_example(Zook.from_spec(own), examples) is None
+
+
 def test_wave_param_roundtrip():
     s = spec(leg(around=180, movement={"wave": 0.3, "phase": 0.2}))
     z = Zook.from_spec(s)

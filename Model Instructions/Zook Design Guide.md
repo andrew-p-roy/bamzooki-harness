@@ -262,7 +262,8 @@ For single-part legs put `phase` / `mirror_phase` on the leg itself.
 - Study the example Zooks (table in section 1) with `get_zook`; Spider is the fastest and the
   best pusher, which makes it a good reference for a strong all-rounder. **Learn from them, but
   don't copy them:** your Zook must be your own design, built from scratch. Borrow ideas (a leg
-  construction, a stride path, a gait pattern), not an example's spec.
+  construction, a stride path, a gait pattern), not an example's spec. `save_zook` refuses a
+  design that is too close to an example.
 
 ## 8. What wins
 
@@ -276,8 +277,11 @@ For single-part legs put `phase` / `mirror_phase` on the leg itself.
   height, and not getting stuck on edges.
 - **Ball** (Zookball): the striker must push the ball straight into the goal without knocking
   it out; a broad, flat front helps *(inferred)*.
-- Read each contest's rules with `get_contest`. The engine is deterministic for a given seed,
-  so a change in result comes from your change.
+- **Read the rules of the contest you'll be judged on** with `get_contest` before you design,
+  and design for exactly that: how it's won, lost and drawn.
+- Games aren't deterministic: the same two Zooks can get a different result each time. A design
+  that only just wins a practice contest may lose the real one, so aim to win clearly and
+  consistently, and judge a change on more than one game.
 
 ## 9. Testing strategy: you choose every game
 
@@ -292,7 +296,7 @@ part of the challenge.
 |---|---|---|
 | `test_zook(ref, duration)` | the Zook Kit's Test button: one Zook walks to a target in BoxEnv (plain, no obstacles) | which Zook, and how long: `duration` 1–30 s (default 10; a few seconds shows whether it walks) |
 | `run_trial(ref, trial)` | one Zook Kit trial for one Zook | which Zook (`ref`), which trial: `sprint`, `hurdles`, `lap`, `block_push`, `high_jump`, or `free:<Env>` with a `duration` |
-| `run_contest(contest, green, red, seed)` | one contest between two Zooks | which contest, which Zook plays green and which plays red, and the `seed` |
+| `run_contest(contest, green, red)` | one contest between two Zooks | which contest, and which Zook plays green and which plays red |
 
 - **Trials** (as in the manual): sprint = run to the finish line; block_push = how far it pushes
   blocks in a set time; hurdles = run to the finish over hurdles; high_jump = how high it jumps
@@ -305,8 +309,8 @@ part of the challenge.
   `Wormthing`) or any of your own designs and versions (`MyZook`, `MyZook@2`). You can pit your
   new version against your previous one (`green="MyZook@4", red="MyZook@3"`) to check that a
   change is an improvement.
-- **Seeds:** the same seed gives exactly the same game. Re-running the same game with the same
-  seed teaches you nothing; change the seed to check that a result wasn't luck.
+- **Luck:** games vary, so one win can be luck. Replaying the same game is a fair way to check a
+  result holds up.
 - **Free (no run used):** `save_zook`, `edit_zook`, `preview_zook`, `get_zook`, `validate_zook`,
   and all the reference tools. `test_zook` (unlimited in the standard challenges) and
   `run_trial` (its own allowance) don't use a run either. Look at the pictures, and test your
@@ -329,7 +333,7 @@ A sensible plan:
    lose, read the stats and stills (did you fall off, get pushed, walk the wrong way?), change
    one thing with `edit_zook`, and play the next game: against the target again, or new version
    against old.
-5. Keep a few runs in reserve to confirm your best version on a different seed. Then
+5. Keep a few runs in reserve to confirm your best version wins again, not just once. Then
    `submit_design` it: that plays the single official evaluation game.
 
 ## 10. Limits
