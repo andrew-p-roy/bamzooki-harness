@@ -1,0 +1,64 @@
+# The config, committed with its defaults: it runs the tournament as-is on a default Windows
+# install. Edit it freely: after `git update-index --skip-worktree bamzooki.toml` your changes stay
+# out of git. bamzooki.example.toml documents every setting.
+install_dir = "C:/Program Files (x86)/BAMZOOKi"
+save_dir = "~/AppData/Roaming/Bamzooki"
+
+# Where models' entries, videos and arena transcripts go (outside the repo).
+arena_dir = "~/BAMZOOKi Arena"
+
+[arena]
+# OpenRouter model ids queued for tools/arena.py (/next calls the next one).
+challengers = []
+
+# --- The challenge -------------------------------------------------------------------------
+# challenge_rules: "short" or "full" (challenges/short.toml, challenges/full.toml), or a path to
+# your own rules file. The rules set the limits (test runs, trials, tests), the scoring, qualifying
+# (qualifying = "first" / "all" / "none"), the knockout's size (max_qualifiers, default 8) and
+# whether the challenges are hidden from the models.
+#
+#   short: a design phase before EACH knockout round, with the limits afresh each time. Every model
+#          designs round 1's Zook (qualifying "first", the default: it plays round 1's qualifying
+#          game against the round's opponent, and a win gets the model in). Once max_qualifiers
+#          models have qualified, the rest of the queue isn't called and round 1 can start. After
+#          each knockout round only the models still in design the next round's Zook.
+#   full:  ONE set of limits, shared by all the model's Zooks. During the whole design phase it must
+#          come up with a separate Zook for each challenge, then put one forward for each (no
+#          qualifying: the first max_qualifiers to put their Zooks forward are in the knockout).
+#
+# contest / opponent: one element per round of the knockout between the models, the final last.
+# "" = picked at random: no contest or opponent is picked twice while there are others. The
+# opponent is the example Zook a round's qualifying game is played against (short), or the Zook to
+# beat (full). A knockout of n models has log2(n) rounds, rounded up (8 models: 3 rounds), and the
+# arena checks the queue against the rounds at the start, saying what will change. With fewer
+# entrants, full rules skip the first elements and short rules the ones after round 1; with more,
+# random rounds are added (full: before round 1; short: after it). Round 1 (short) and the final
+# always play as set. A field that isn't a power of two gets byes in the first round only, for the
+# best qualifiers (at random without qualifying).
+#
+# hidden: the models aren't told the contests (short.toml: visible; full.toml: hidden; uncomment to
+# override). Hidden, there's no qualifying under either rules. Short: the models still design each
+# round's Zook in its own phase, blind, and the contest is announced once the round's Zooks are in.
+# Full: the model designs a team of one Zook per round without knowing what it will face; at the
+# start of each knockout round its contest is announced (drawn then if ""; the same for every match
+# in the round) and each model in a match picks one of its team Zooks for it, each only once.
+#
+# Every model MUST put forward one distinctly different Zook per round. In the knockout a model
+# with no Zook for a round (none put forward, no team Zook left, or with qualifying = "all" a lost
+# qualifying game in that round) forfeits the match: its opponent goes through without a game.
+challenge_rules = "short"
+contest = ["", "", "Zook Sumo"]
+opponent = ["", "", "Spider"]
+# hidden = true
+max_turns = 120
+max_tokens = 16000
+# --speak voices (Kokoro). The announcer:
+voice = "bm_george"      # British male
+voice_speed = 1.1
+presentation_words = 120 # with showtime: the presentation length the models are asked for
+
+[arena.voices]           # the contestants' own voices, by lab (or full model id)
+google = "af_heart"      # Gemini: American female
+qwen = "bf_emma"         # Qwen: British female
+openai = "am_puck"       # GPT / Luna: American male
+anthropic = "am_michael" # Claude: American male

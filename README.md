@@ -20,11 +20,12 @@ Python 3.11+, ffmpeg on PATH (for videos), and an [OpenRouter](https://openroute
 ```
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[dev]"
-copy bamzooki.example.toml bamzooki.toml
+git update-index --skip-worktree bamzooki.toml
 echo OPENROUTER_API_KEY=sk-or-...your key...> .env
 ```
 
-`bamzooki.toml` works as-is on a default Windows install. `.env` is gitignored, and the key is
+`bamzooki.toml` comes with the defaults the tournament runs with, and works as-is on a default
+Windows install; the `skip-worktree` line keeps your own edits to it out of git. `.env` is gitignored, and the key is
 never printed or logged. Optionally copy your own BAMZOOKi manual PDF to
 `Model Instructions/BAMZOOKi Manual.pdf` so models can read it with `read_manual`.
 
@@ -110,10 +111,13 @@ python -m venv .venv
 # Windows: .venv\Scripts\activate    Linux/macOS: source .venv/bin/activate
 pip install -e ".[dev]"
 pre-commit install                        # enables the asset guard on every commit
-cp bamzooki.example.toml bamzooki.toml    # then edit paths (optional on a default Windows install)
+git update-index --skip-worktree bamzooki.toml   # your edits to the config stay out of git
 ```
 
-`bamzooki.toml` is gitignored. Each setting can also be given by an environment variable:
+`bamzooki.toml` is in the repo with the default settings (edit its paths on other systems;
+`bamzooki.example.toml` documents every setting). With `skip-worktree` set, git ignores your
+changes to it; `git update-index --no-skip-worktree bamzooki.toml` undoes that, e.g. to commit new
+defaults. Each setting can also be given by an environment variable:
 
 | key            | env var              | meaning                                                         |
 |----------------|----------------------|-----------------------------------------------------------------|

@@ -1,4 +1,6 @@
-# --- Local configuration (machine-specific paths) ---
+# --- Local configuration ---
+# bamzooki.toml is committed with its defaults, so this line doesn't apply to it any more: local
+# edits are kept out of git with `git update-index --skip-worktree bamzooki.toml` (README, Setup).
 /bamzooki.toml
 
 # --- Video renders (renders/<model>/<timestamp>_....mp4 + .json); contain game visuals ---
