@@ -50,13 +50,13 @@ def test_tracks_and_pick(tmp_path):
     tracks = music.load_tracks(tmp_path / "tracks.toml")
     assert list(tracks) == ["a", "b", "c"] and tracks["a"].loop_end == 20.5 and tracks["c"].volume == 0.5
 
-    def challenge(music_name="", contest="Zook Sumo"):
-        return SimpleNamespace(music=music_name, evaluation=SimpleNamespace(contest=contest))
-    assert music.pick_track(tracks, challenge("a")).name == "a"  # named by the challenge
-    assert music.pick_track(tracks, challenge()).name == "b"  # tagged with its contest
-    assert music.pick_track(tracks, challenge(contest="Zook Tag")).name == "c"  # the default
-    assert music.pick_track(tracks, challenge("none")) is None  # silence asked for
-    assert music.pick_track({}, challenge()) is None
+    def rules(music_name=""):
+        return SimpleNamespace(music=music_name)
+    assert music.pick_track(tracks, rules("a"), "Zook Sumo").name == "a"  # named by the rules
+    assert music.pick_track(tracks, rules(), "Zook Sumo").name == "b"  # tagged with the game's contest
+    assert music.pick_track(tracks, rules(), "Zook Tag").name == "c"  # the default
+    assert music.pick_track(tracks, rules("none"), "Zook Sumo") is None  # silence asked for
+    assert music.pick_track({}, rules(), "Zook Sumo") is None
     assert music.load_tracks(tmp_path / "nothing.toml") == {}
 
 

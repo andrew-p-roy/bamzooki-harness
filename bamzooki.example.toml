@@ -25,14 +25,38 @@
 # render_dir / zoo_dir override the Renders / Zook Entries folders individually.
 
 
-# The challenge given to models through the MCP server: task text, test-run budget (default 20)
-# and the final evaluation. See challenges/default.toml.            BAMZOOKI_CHALLENGE
-# challenge = "challenges/default.toml"
-
 # tools/arena.py: OpenRouter models take the challenge in turn (needs OPENROUTER_API_KEY in .env).
+# The MCP server on its own reads the same [arena] challenge settings.
 # [arena]
 # challengers = ["anthropic/claude-sonnet-4.5", "openai/gpt-5", "google/gemini-2.5-pro"]
-# challenge = "challenges/short.toml"
+#
+# --- The challenge ---
+# challenge_rules: "short" or "full" (challenges/<name>.toml) or a path to your own rules file.
+#   short: a design phase before EACH knockout round, the limits afresh each time; every model
+#          designs round 1's Zook, then only the models still in design the next round's. The rules
+#          file's qualifying = "first" (default: round 1's Zook plays a qualifying game, a win gets
+#          the model in), "all" (every round's; a later loss forfeits that match) or "none".
+#   full:  ONE set of limits shared by all the model's Zooks: a separate Zook for each challenge,
+#          one put forward for each, no qualifying.
+#   Both: max_qualifiers (default 8) models at most in the knockout; once it's full the rest of the
+#   queue isn't called.
+# contest / opponent: one element per knockout round (the final last); "" = random (no repeats
+#   while there are others). The opponent is a round's qualifying opponent or Zook to beat. The
+#   arena checks the queue against the rounds at the start (n models: log2(n) rounds, rounded up):
+#   with fewer, rounds are skipped (full: the first ones; short: those after round 1); with more,
+#   random ones are added (full: before round 1; short: after it). A field that isn't a power of
+#   two gets first-round byes, for the best qualifiers.
+# hidden: the models aren't told the contests (short.toml: visible, full.toml: hidden). Hidden: no
+#   qualifying. Short: each round's Zook is designed blind and the contest announced once it's in.
+#   Full: a team of one Zook per round, shared limits; each knockout round's contest is announced
+#   as it starts and each model picks a team Zook for it, each only once.
+# Every model MUST put forward one distinctly different Zook per round; in the knockout a model with
+#   no Zook for a round (or no team Zook left) forfeits the match.
+# challenge_rules = "short"
+# contest = ["", "", "Zook Sumo"]
+# opponent = ["", "", "Spider"]
+# hidden = false
+#
 # max_turns = 120          # model turns per challenger before the runner stops it
 # max_tokens = 4000        # per model reply
 # temperature = 0.7

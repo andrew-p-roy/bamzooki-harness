@@ -58,9 +58,10 @@ def load_tracks(path: Path = TRACKS_FILE) -> dict[str, Track]:
     return out
 
 
-def pick_track(tracks: dict[str, Track], challenge=None) -> Track | None:
-    """The music for a challenge: its own `music = "<track>"` (or "none" for silence), else the first
-    track tagged with its contest (e.g. "zook sumo"), else the default track, else any track."""
+def pick_track(tracks: dict[str, Track], challenge=None, contest: str = "") -> Track | None:
+    """The music for a challenge's game: the rules' own `music = "<track>"` (or "none" for silence),
+    else the first track tagged with the game's contest (e.g. "zook sumo"), else the default track,
+    else any track."""
     if not tracks:
         return None
     wanted = str(getattr(challenge, "music", "") or "").strip()
@@ -68,7 +69,7 @@ def pick_track(tracks: dict[str, Track], challenge=None) -> Track | None:
         return None
     if wanted in tracks:
         return tracks[wanted]
-    contest = str(getattr(getattr(challenge, "evaluation", None), "contest", "") or "").lower()
+    contest = contest.lower()
     if contest:
         for t in tracks.values():
             if contest in t.tags:

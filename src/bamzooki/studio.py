@@ -20,13 +20,13 @@ from functools import cached_property
 from pathlib import Path
 
 from . import manual, music
-from .challenge import Challenge, ChallengeState
+from .challenge import Challenge, ChallengeState, Match, Session
 from .manual import MODEL_INSTRUCTIONS
 from .runner import TRIALS, Engine, Job, contests
 from .runner.contests import RULES
 from .sdk import schema
 from .sdk.store import Zoo, ZookRef, entrant_folder, safe_name
-from .sdk.zook import SpecError, Zook, apply_edits, copied_example, spec_warnings, validate_spec
+from .sdk.zook import SpecError, Zook, apply_edits, copied_example, spec_warnings, too_like, validate_spec
 
 DEFAULT_VIEWS = ("three_quarter", "front", "top")
 
@@ -37,6 +37,8 @@ TEST_MAX_S = 30.0  # a test lasts the model's chosen duration, up to this
 COPY_REFUSAL = ("This design is too close to one of the example Zooks. Copying an example, whole or with "
                 "small tweaks, isn't allowed: design your own Zook, using the examples for ideas, not as a "
                 "template.")
+DISTINCT_REFUSAL = ("This design is too close to a Zook you've already put forward. Each Zook you submit must be "
+                    "a distinct design, not a small change to another one: design a different Zook for this.")
 
 
 # Statuses that are real game results (count as a run; "timeout" = the game's time limit).
@@ -48,9 +50,12 @@ class Studio:
 
     def __init__(self, model: str | None = "manual", engine: Engine | None = None,
                  challenge: Challenge | None = None, position: str = "none",
-                 view_fit: tuple[float, int] | None = None, fullscreen: bool = False, live_sound: bool = False):
+                 view_fit: tuple[float, int] | None = None, fullscreen: bool = False, live_sound: bool = False,
+                 session: Session | None = None):
         """model: the entrant's full model name (e.g. "anthropic/claude-sonnet-4.5"); its folder
         is "Zook Entries/<name with / replaced>". None = the model registers itself first.
+        session: the rounds under the rules (its rules replace `challenge`); a challenge alone gets
+        the default single round (Zook Sumo against Spider).
         position, view_fit, fullscreen: how test games and the challenge game show the engine (as in Job).
         live_sound: the challenge game's countdown beeps and music also play on this computer (the
         video has them either way)."""
@@ -63,7 +68,8 @@ class Studio:
         self.lock = threading.Lock()
         self.work = self.install.config.cache_dir / "studio"
         self.work.mkdir(parents=True, exist_ok=True)
-        self.challenge = challenge
+        self.session = session or (Session.plan(challenge) if challenge else None)
+        self.challenge = self.session.rules if self.session else None
         self.model: str | None = None  # folder name
         self.model_name: str | None = None  # full model name as given
         self.state: ChallengeState | None = None
@@ -74,6 +80,10 @@ class Studio:
         self.model_name = model.strip()
         self.model = entrant_folder(model)
         self.state = ChallengeState(self.challenge, self.zoo.root / self.model) if self.challenge else None
+        s = self.session
+        if self.state and s.round_by_round and s.current is not None:
+            while self.state.round < s.current:  # the arena opened a later round: its limits start afresh
+                self.state.advance()
 
     def register(self, model_name: str) -> dict:
         """Let a model name itself when the operator didn't (new names only, so an entrant can't
@@ -301,7 +311,7 @@ class Studio:
         used again by the next one). Without a challenge: 'Run'."""
         if not self.state:
             return "Run"
-        return f"Test {self.state.runs_used + 1:02d} - {self.challenge.name}"
+        return f"Test {self.state.total_runs_used + 1:02d} - {self.challenge.name}"
 
     def _video_path(self, label: str) -> Path:
         """Zook Entries/<model>/Videos/<label>.mp4 (stills and the .json sidecar go beside it).
@@ -365,31 +375,118 @@ class Studio:
         return out
 
     # --- challenge -----------------------------------------------------------------------
+    def _current(self) -> int | None:
+        return self.state.round if self.session.round_by_round else None
+
     def challenge_info(self) -> dict:
         if self.challenge and not self.model:
-            return {**self.challenge.describe(), "registered": False,
+            return {**self.session.describe(), "registered": False,
                     "next_step": "Call register_entrant with your full model name (e.g. 'anthropic/claude-sonnet-4.5')."}
         if not self.challenge:
             return {"challenge": None, "note": "No challenge configured: test runs are unlimited."}
-        return {**self.challenge.describe(), "budget": self.state.budget(),
+        return {**self.session.describe(self._current()), "budget": self.state.budget(),
                 "allowed_opponents": {"examples": self.zoo.example_names(),
                                       "your_designs": self.zoo.designs(self.model)},
-                "submitted": self.state.data["submissions"]}
+                "submitted": self.state.submissions}
 
-    def submit(self, ref: str) -> dict:
-        """Play the challenge's single evaluation game with this design (not counted against the budget)."""
+    def submit(self, ref: str, round: int | None = None) -> dict:
+        """Put a design forward: hidden challenges, into the team; otherwise for a round (round by round:
+        the current one, playing its qualifying game when the rules have them)."""
         if not self.challenge:
             return {"error": "No challenge configured."}
         self._need_model()
-        if why := self.state.can_submit():
-            return {"error": why}
+        s, n = self.session, len(self.session.rounds)
         mine = self._ref(ref)
         if mine.owner != self.model:
             return {"error": "Submit one of your own designs."}
-        if self._is_copy(Zook.load(mine.path, self.install.zook_key)):
+        if s.team:
+            team = self.state.submitted_for(None)
+            if len(team) >= n:
+                return {"error": f"Your team is complete: {', '.join(t['design'] for t in team)}."}
+            if refused := self._refuse(mine):
+                return refused
+            entry = {"design": mine.label, "round": None, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+            self.state.record_submission(entry)
+            team = [t["design"] for t in self.state.submitted_for(None)]
+            left = n - len(team)
+            return {**entry, "team": team, "note": f"{left} more to put forward." if left else
+                    "Your team is complete. In the knockout you'll hear each round's contest and pick one of "
+                    "these for it (each only once)."}
+        if s.round_by_round:
+            k = self.state.round
+            if k >= n:
+                return {"error": "All rounds are done: you've submitted a Zook for each."}
+            if round is not None and round != k + 1:
+                return {"error": f"This design phase is for round {k + 1}: submit your Zook for it (rounds are "
+                                 "designed one at a time)."}
+        else:
+            if round is None or not 1 <= int(round) <= n:
+                return {"error": f"Say which challenge this Zook is for: submit_design(ref, round) with round 1-{n}."}
+            k = int(round) - 1
+        if len(self.state.submitted_for(k + 1)) >= self.challenge.submissions:
+            return {"error": f"You've already put a Zook forward for round {k + 1}."}
+        if refused := self._refuse(mine):
+            return refused
+        match, qualifying = s.rounds[k], s.qualifying_in(k + 1)
+        entry = {"design": mine.label, "round": k + 1, "game": match.public() if qualifying else
+                 {} if s.hidden else {"contest": match.contest}, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+        if qualifying:
+            played = self._qualifying_game(mine, match, k + 1)
+            if "error" in played:
+                return played
+            entry.update(played)
+        self.state.record_submission(entry)
+        log = self.zoo.root / self.model / "results.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"kind": "submission", **entry, "seed": match.seed}) + "\n")
+        out = dict(entry)
+        if s.round_by_round and s.current is not None:  # the arena opens the next round
+            won = entry.get("outcome") == "win"
+            out["next"] = (
+                ("You didn't win round 1's qualifying game, so you're not in the knockout. "
+                 if qualifying and k == 0 and not won else
+                 "You lost this round's qualifying game, so you forfeit this round's knockout match. "
+                 if qualifying and not won else "")
+                + ("That's your Zook for the final." if k + 1 >= n else
+                   "That's your Zook for this round. If you're still in after this round's knockout match, the next "
+                   "round's design phase opens for you, with fresh limits."))
+        elif s.round_by_round:
+            self.state.advance()
+            nxt = s.rounds[k + 1] if k + 1 < n else None
+            out["next"] = ("That was the last round." if nxt is None else
+                           f"Round {k + 2}" + ("" if s.hidden else f": {nxt.contest} against {nxt.opponent}")
+                           + ", with fresh limits. get_challenge shows it.")
+            out["budget"] = self.state.budget()
+        else:
+            missing = [i + 1 for i in range(n) if not self.state.submitted_for(i + 1)]
+            out["still_to_put_forward"] = missing or "none: a Zook for every challenge"
+        return out
+
+    def _refuse(self, mine: ZookRef) -> dict | None:
+        """A design that can't be put forward: a copy of an example, or not distinct from the model's
+        other Zooks put forward."""
+        zook = Zook.load(mine.path, self.install.zook_key)
+        if self._is_copy(zook):
             return {"error": COPY_REFUSAL + " It can't be submitted."}
-        g = self.challenge.evaluation
-        # The opponent comes from the operator's challenge file, so any Zook may be named there
+        if self._like_submitted(mine, zook):
+            return {"error": DISTINCT_REFUSAL}
+        return None
+
+    def _like_submitted(self, mine: ZookRef, zook: Zook) -> bool:
+        """Is this design the same as, or too close to, a Zook the model has already put forward?
+        (Which one stays unsaid, as with the copy check.)"""
+        others = {}
+        for s in self.state.submissions:
+            if s["design"] == mine.label:
+                return True
+            if s["design"] not in others:
+                others[s["design"]] = Zook.load(self._ref(s["design"]).path, self.install.zook_key)
+        return too_like(zook, others) is not None
+
+    def _qualifying_game(self, mine: ZookRef, g: Match, round_no: int) -> dict:
+        """A round's qualifying game (not counted against the budget): the outcome, or an error."""
+        # The opponent comes from the operator's bamzooki.toml, so any Zook may be named there
         # ("Spider" = an example, "<model>/<Name>@n" = a saved design).
         opp = self.zoo.resolve(g.opponent if "/" in g.opponent else f"examples/{g.opponent}")
         info = contests.find(g.contest, self.install)
@@ -400,31 +497,24 @@ class Studio:
         job = Job(info, green.path, red.path if red else None, seed=g.seed, video=True, model=self.model,
                   duration=self.challenge.time_limit, position=self.position, view_fit=self.view_fit,
                   fullscreen=self.fullscreen, countdown=True,
-                  music=music.pick_track(music.load_tracks(), self.challenge), live_sound=self.live_sound,
-                  video_path=self._video_path(f"Challenge game - {self.challenge.name} - {info.name} - "
+                  music=music.pick_track(music.load_tracks(), self.challenge, g.contest), live_sound=self.live_sound,
+                  video_path=self._video_path(f"Qualifying round {round_no} - {self.challenge.name} - {info.name} - "
                                               f"{_short(mine)} vs {_short(opp)}"))
         with self.lock:
             r = self.engine.run(job, name=f"eval-{info.contest_file}")
         if r.status not in PLAYED:
-            return {"error": f"The evaluation game didn't produce a result ({r.status}); your submission was NOT "
+            return {"error": f"The qualifying game didn't produce a result ({r.status}); your submission was NOT "
                              "used. Call submit_design again.", "status": r.status, "detail": r.error}
         outcome = "win" if r.winner == g.side else ("draw" if r.winner is None else "loss")
-        score = {"win": 1.0, "draw": self.challenge.draw_points, "loss": 0.0}[outcome]
-        entry = {"design": mine.label, "game": g.public(), "outcome": outcome, "score": score,
-                 "status": r.status, "winner": r.winner, "scores": r.scores,
-                 "finish_after_go_s": None if r.finish_time is None else round(r.finish_time, 2),
-                 "fell": r.verdict.fell if r.verdict else {},
-                 "video": str(r.video) if r.video else None, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+        out = {"outcome": outcome, "score": {"win": 1.0, "draw": self.challenge.draw_points, "loss": 0.0}[outcome],
+               "status": r.status, "winner": r.winner, "scores": r.scores,
+               "finish_after_go_s": None if r.finish_time is None else round(r.finish_time, 2),
+               "fell": r.verdict.fell if r.verdict else {}, "video": str(r.video) if r.video else None}
         if r.video:
             fin, go = r.finish_time, r.video_lead  # the countdown comes before Go
             sheet = self._sheet(r.video, [go, go + (fin or 10) / 2, go + (fin if fin is not None else 20), 1e9])
-            entry["stills"] = str(sheet) if sheet else None
-        self.state.record_submission(entry)
-        log = self.zoo.root / self.model / "results.jsonl"
-        log.parent.mkdir(parents=True, exist_ok=True)
-        with log.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"kind": "submission", **entry, "seed": g.seed}) + "\n")
-        return entry
+            out["stills"] = str(sheet) if sheet else None
+        return out
 
     def results(self, limit: int = 20) -> list[dict]:
         self._need_model()

@@ -470,6 +470,20 @@ def copied_example(design: "Zook", examples: dict[str, "Zook"]) -> str | None:
     return next((n for n, ex in examples.items() if likeness(design, ex) >= COPY_THRESHOLD), None)
 
 
+# A model's own Zooks put forward must be distinct designs: stricter than the copy check, and both
+# ways (neither may have this share of its parts nearly unchanged in the other).
+DISTINCT_THRESHOLD = 0.5
+
+
+def resemblance(a: "Zook", b: "Zook") -> float:
+    return max(likeness(a, b), likeness(b, a))
+
+
+def too_like(design: "Zook", others: dict[str, "Zook"]) -> str | None:
+    """The other Zook this design is too close to to count as a different Zook, or None."""
+    return next((n for n, z in others.items() if resemblance(design, z) >= DISTINCT_THRESHOLD), None)
+
+
 # --- edits ------------------------------------------------------------------------------
 
 _STEP = re.compile(r"([A-Za-z_]\w*)|\[(\d+)\]")

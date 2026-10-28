@@ -94,7 +94,9 @@ class Zoo:
             d = self.examples / name
             files = sorted(d.glob("*.zook"), key=lambda p: [int(x) for x in re.findall(r"\d+", p.stem)]) if d.is_dir() else []
             if not files:
-                raise KeyError(f"no example Zook {name!r}; examples: {', '.join(self.example_names())}")
+                yours = (f"none of your designs is called {name!r} (save_zook saves one; list_zooks lists them), and "
+                         if model and "/" not in ref else "")
+                raise KeyError(f"{yours}no example Zook {name!r}; examples: {', '.join(self.example_names())}")
             return ZookRef("examples", name, None, files[-1])
         versions = self.designs(owner).get(name)
         if not versions:

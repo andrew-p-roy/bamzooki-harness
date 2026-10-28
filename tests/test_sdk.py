@@ -216,3 +216,19 @@ def test_wave_param_roundtrip():
     (child,) = z.root_part.findall("bodysolid")
     assert child.attrs["spine_amplitude"] == "0.3"
     assert z.to_spec()["body"]["children"][0]["movement"]["wave"] == 0.3
+
+
+@pytest.mark.install
+def test_own_zooks_must_differ_more_than_from_examples(install):
+    from bamzooki.sdk.zook import COPY_THRESHOLD, DISTINCT_THRESHOLD, resemblance, too_like
+
+    assert DISTINCT_THRESHOLD < COPY_THRESHOLD  # stricter between a model's own Zooks
+    ex = {p.parent.name: Zook.load(p, install.zook_key) for p in install.example_zooks() if "Teams" in p.parts}
+    names = sorted(ex)
+    for i, a in enumerate(names):  # different designs pass, both ways
+        for b in names[i + 1:]:
+            assert resemblance(ex[a], ex[b]) < DISTINCT_THRESHOLD, (a, b)
+    s = ex["Spider"].to_spec()
+    for p in s["body"]["children"][:4]:  # half the legs restyled: still too close to count as another Zook
+        p.setdefault("size", {})["width"] = 0.5
+    assert too_like(Zook.from_spec(s), {"Spider": ex["Spider"]}) == "Spider"

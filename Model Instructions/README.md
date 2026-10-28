@@ -9,7 +9,8 @@ see; nothing else needs changing.
 | `Zook Design Guide.md` | How Zooks and the Zook Kit work: geometry, joints, movement paths, steering, gait recipes, what wins, testing strategy, and a map from Zook Kit options to spec fields | the `get_design_guide` tool |
 | `BAMZOOKi Manual.pdf` | **Your own copy** of the official Zook Kit manual (BBC material: gitignored and blocked by the asset guard, never committed) | the `read_manual` tool (contents, page ranges, search) |
 
-The challenge itself (task text, run budget, evaluation game) lives in `challenges/*.toml`, and
+The rules (limits, scoring, hidden, qualifying) live in `challenges/*.toml`, the rounds (contests and
+opponents) in `bamzooki.toml` `[arena]`, and
 the contest rules models see are in `src/bamzooki/runner/contests.py` (`RULES`).
 
 If the manual is missing (e.g. a fresh clone), copy your PDF here as `BAMZOOKi Manual.pdf`;

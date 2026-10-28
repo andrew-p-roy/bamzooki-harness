@@ -15,8 +15,11 @@ prompt to talk to it. Commands:
     /next                 next challenger in the queue      /challenger <model>  a specific model
     /leaderboard          standings in this challenge       /status              current budget
     /open                 open the current entrant's latest video and stills
-    /contest              knockout tournament between this session's qualified Zooks (a model
-                          qualifies by WINNING its challenge game); the winner then makes a speech
+    /contest              knockout tournament between this session's qualified models (a round 1
+                          qualifying WIN, or with no qualifying having put Zooks forward; at most
+                          the rules' max_qualifiers); each round plays its contest (the final the
+                          last), and the winner then makes a speech. Short rules: before each later
+                          round the models still in design their Zook for it
     /exhibition <a> <b>   one match between any two Zooks submitted this session (doesn't count)
     /halloffame           the champions you added after a knockout (kept across sessions)
     /end                  finish: a table of every model's result, runs, tokens and cost (saved to
@@ -55,6 +58,7 @@ import asyncio
 import json
 import os
 import queue
+import random
 import re
 import shutil
 import sys
@@ -69,7 +73,7 @@ import httpx
 from . import music, showtime, tournament
 from .announcer import DEFAULT_MODEL as DEFAULT_ANNOUNCER
 from .announcer import Announcer
-from .challenge import Challenge, ChallengeState
+from .challenge import ChallengeState, Session, plan_from_config
 from .commentary import DEFAULT_MODEL as COMMENTATOR
 from .config import REPO_ROOT, load_config
 from .manual import MODEL_INSTRUCTIONS
@@ -78,10 +82,21 @@ from .sdk.store import entrant_folder
 API = "https://openrouter.ai/api/v1"
 PROMPT_PATH = MODEL_INSTRUCTIONS / "Agent Prompt.md"
 KICKOFF = ("Begin the challenge now. Start with get_challenge. Work only through the bamzooki tools, and "
-           "finish with submit_design followed by your presentation to the audience.")
+           "finish by putting your Zooks forward with submit_design as get_challenge describes, followed by your "
+           "presentation to the audience.")
 SHOW_WORDS = 100  # model text between tool calls is cut to this many words on screen (not in transcripts)
-NUDGE = ("You haven't submitted yet. Keep going with the bamzooki tools; when you're ready (or out of "
-         "runs), call submit_design with your best design, then present your challenger.")
+NUDGE = ("You haven't put all your Zooks forward yet (get_challenge shows what's still to submit), and in the "
+         "knockout you FORFEIT any match you have no Zook for. Keep going with the bamzooki tools; when you're ready "
+         "(or out of runs), put the rest forward with submit_design, each a distinctly different design, then "
+         "present your challenger.")
+# Short rules: a later round's design phase, for the models still in.
+ROUND_KICKOFF = ("[{round}] You're through to the {round}: round {k} of {n}. Design a NEW Zook for this round now: "
+                 "{what}. Your limits start afresh for this round (get_challenge shows them and the round). It MUST "
+                 "be a distinctly different design from the Zooks you've already put forward: submit_design refuses "
+                 "one that is too close. {qualifying}Put it forward with submit_design, then present it to the "
+                 "audience. If you don't put a Zook forward for this round, you FORFEIT its match.")
+CHOOSE = ("[The {event}, {round}] This round's contest is {contest}: {rules}\nYour opponent is {opp}. Pick the Zook "
+          "you'll play: {options}.{once} Answer with the Zook's name only (no tools).")
 # --showtime: the presentation is read out on stage, so it's kept short ([arena] presentation_words).
 SHOW_PRESENTATION = " Keep your presentation to at most {words} words: it is read out on stage."
 PRE_MATCH = ("The {contest}, {round}: your Zook {mine} is about to play {opp_model}'s Zook {opp_zook} "
@@ -92,6 +107,7 @@ AUDIENCE = "[{context}] Someone in the audience says to you: {msg}\n(Reply to th
 INTERVIEW = ("[{context}] Post-match interview. {seen}The announcer asks you: {question}\n"
              "Answer the audience in at most 60 words (no lists, and don't call any tools).")
 STOCK_QUESTIONS = ("{name}, what won you that game?", "{name}, what happened out there?")  # no announcer
+SELECTION_SECONDS = 8.0  # the selection screen stays up at least this long before a game
 REMARK_CHARS = 280  # the pre-match comment is one line of at most this many characters
 INTERJECTION = ("[A message from the audience, sent while you were working. Take it into account (answer "
                 "briefly if it asks something), then carry on where you were.]\n\n{}")
@@ -265,17 +281,27 @@ class Entrant:
     cost: float = 0.0
     tokens: int = 0
     transcript: Path | None = None
-    design: str | None = None  # the submitted design ("folder/Name@n")
-    qualified: bool = False  # its challenge game was a win
+    design: str | None = None  # the latest design put forward ("folder/Name@n")
+    qualified: bool = False  # in the knockout: a qualifying win, or (no qualifying) a Zook put forward
     single_tool: bool = False  # its provider takes one tool call per reply (found out on the way)
-    submission: dict | None = None  # submit_design's result
+    submission: dict | None = None  # the latest submit_design result
+    entries: list[dict] = field(default_factory=list)  # every Zook put forward: {"design", "round", ...}
+    played: set[str] = field(default_factory=set)  # team Zooks already played in the knockout (hidden)
+
+    def for_round(self, round_no: int | None) -> str | None:
+        """The design put forward for a round (1-based), if any."""
+        return next((x["design"] for x in self.entries if round_no is not None and x.get("round") == round_no), None)
+
+    def zooks(self) -> list[str]:
+        """Every design it put forward, in order, each once."""
+        return list(dict.fromkeys(x["design"] for x in self.entries))
     presented: bool = False  # its presentation has been saved
     facts: dict = field(default_factory=dict)  # showtime.model_facts: maker, home, release month...
     to_call: dict | None = None  # a challenge game result the announcer hasn't called yet
 
 
 class Arena:
-    def __init__(self, challenge: Challenge, queue: list[str], max_turns: int = 120, max_tokens: int = 4000,
+    def __init__(self, session: Session, queue: list[str], max_turns: int = 120, max_tokens: int = 4000,
                  temperature: float | None = None, auto: bool = False, verbose: bool = False,
                  show: bool = False, announcer: str | None = DEFAULT_ANNOUNCER,
                  announcer_style: str = "ringside", speak: bool = False, voice: str | None = None,
@@ -290,7 +316,10 @@ class Arena:
         self.position = "right-half" if monitor else "none"
         self.view_fit = MONITOR_VIEW if monitor else None
         self.fullscreen = fullscreen
-        self.challenge = challenge
+        self.plan = session  # the challenge session: its rounds, the same for every model
+        if session.round_by_round:
+            session.current = 0  # short rules: the arena opens each round; everyone designs round 1 first
+        self.challenge = session.rules
         self.queue = list(queue)
         self.max_turns = max_turns
         self.auto = auto
@@ -322,12 +351,17 @@ class Arena:
         self.commentator = commentator if self.voice and commentator else None
         self.arena_dir = self.cfg.arena_dir
         self.arena_dir.mkdir(parents=True, exist_ok=True)
+        self.session_file = self.cfg.zoo_dir / "session.json"  # written by save_session(), read by the MCP servers
         self.show_log = self.cfg.transcripts_dir / "Announcer" / f"{time.strftime('%Y-%m-%d_%H-%M-%S')}.md"
         self.entrant: Entrant | None = None
         self.entrants: dict[str, Entrant] = {}  # everyone called this session, in order
         self.session = None
         self.tools: list[dict] = []
         self._stack = None
+
+    def save_session(self) -> None:
+        """The planned rounds go beside the entries, where every model's MCP server reads them."""
+        self.plan.save(self.session_file)
 
     def archive_entries(self) -> Path | None:
         """Move the previous sessions' Zook folders (designs, budgets, submissions) into
@@ -356,7 +390,7 @@ class Arena:
                "BAMZOOKI_ARENA_DIR": str(self.arena_dir)}
         params = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "bamzooki.mcp_server", "--model", model, "--challenge", str(self.challenge.path),
+            args=["-m", "bamzooki.mcp_server", "--model", model, "--session", str(self.session_file),
                   "--position", self.position] + (["--view-fit", "{},{}".format(*self.view_fit)] if self.view_fit else [])
                  + (["--full-screen"] if self.fullscreen else []) + (["--live-sound"] if self.show else []),
             cwd=str(self.arena_dir), env=env)
@@ -390,13 +424,27 @@ class Arena:
         with e.transcript.open("a", encoding="utf-8") as f:
             f.write(f"\n### {kind} ({time.strftime('%H:%M:%S')})\n\n{text}\n")
 
-    def _game_and_map(self) -> str:
-        """'  |  game: Zook Sumo  |  map: Polo Table, Table Sumo': the challenge's contest and the props
-        its arena is built from ("" if the install can't be read)."""
+    def rules_section(self) -> str:
+        """This session's rules (mode, visibility, how many Zooks, limits, qualifying, the knockout)
+        for the end of every model's system prompt."""
+        return "\n\nThis session's rules:\n" + "\n".join(f"- {line}" for line in self.plan.briefing())
+
+    def _rounds_line(self) -> str:
+        """The session's rounds for the challenger's card: one round's game and map, the rounds'
+        contests and opponents, or how many secret rounds there are."""
+        s = self.plan
+        if s.hidden:
+            return f"  |  {len(s.rounds)} round(s), contests secret"
+        if len(s.rounds) == 1:
+            return self._game_and_map(s.rounds[0].contest) + f"  |  opponent: {s.rounds[0].opponent}"
+        return "  |  " + "  ".join(f"{i}. {m.contest} v {m.opponent}" for i, m in enumerate(s.rounds, 1))
+
+    def _game_and_map(self, name: str) -> str:
+        """'  |  game: Zook Sumo  |  map: Polo Table, Table Sumo': a contest and the props its arena is
+        built from ("" if the install can't be read)."""
         from .install import Install
         from .runner import contests
 
-        name = self.challenge.evaluation.contest
         try:
             inst = Install.discover()
             data = contests.load_contest_file(inst, contests.find(name, inst).contest_file)
@@ -467,8 +515,16 @@ class Arena:
             details.append(f"decided {d['finish_after_go_s']} s after Go")
         if fell := [names.get(c, c) for c, f in (d.get("fell") or {}).items() if f]:
             details.append("fell off: " + ", ".join(fell))
-        details.append("a win qualifies it for tonight's knockout" if d.get("outcome") == "win" else
-                       "only a win qualifies for tonight's knockout, so it won't be in it")
+        rnd = f"round {d['round']} of {len(self.plan.rounds)}" if len(self.plan.rounds) > 1 else ""
+        if rnd:
+            details.append(f"qualifying {rnd}")
+        won = d.get("outcome") == "win"
+        if d.get("round", 1) == 1:
+            details.append("a win qualifies it for tonight's knockout" if won else
+                           "it needed a win to get into tonight's knockout, so it won't be in it")
+        else:
+            details.append("a win lets it play its knockout match" if won else
+                           "it needed a win to play its knockout match, so it forfeits it")
         stills = showtime.image_part(d["stills"]) if d.get("stills") else None
         apart = (f"{showtime.tell_apart(mine)} The other one is {game.get('opponent', 'its opponent')}."
                  if mine.looks() else "")
@@ -491,8 +547,7 @@ class Arena:
         self.entrant = Entrant(model, vision)
         self.entrants[model] = self.entrant
         folder = entrant_folder(model)
-        if win := self._winning_submission(folder):  # won in an earlier session: qualified, can't resubmit
-            self.entrant.submitted, self.entrant.qualified, self.entrant.design = True, True, win["design"]
+        self._restore(self.entrant)  # earlier sessions' submissions (with --keep-entries)
         tdir = self.cfg.transcripts_dir / folder
         tdir.mkdir(parents=True, exist_ok=True)
         self.entrant.transcript = tdir / f"{time.strftime('%Y-%m-%d_%H-%M-%S')}.md"
@@ -502,12 +557,12 @@ class Arena:
             self.entrant.facts["arena_record"] = record
         say(f"\n=== Challenger: {model} ===", "b")
         say(f"    {showtime.card_line(self.entrant.facts)}", "dim")
-        say(f"    challenge: {self.challenge.title}{self._game_and_map()}", "dim")
+        say(f"    challenge: {self.challenge.title}{self._rounds_line()}", "dim")
         if self.announcer:
             self._announce(await self.announcer.introduce(len(self.entrants), self.challenge.title,
                                                           self.entrant.facts))
         await self._connect(model)
-        system = PROMPT_PATH.read_text(encoding="utf-8") + (
+        system = PROMPT_PATH.read_text(encoding="utf-8") + self.rules_section() + (
             f"\n\nYou are registered as the entrant \"{model}\" (your full model name); you don't need "
             f"to call register_entrant.")
         kickoff = KICKOFF + self._presentation_limit()
@@ -591,7 +646,7 @@ class Arena:
                 self._log("model", text)
                 if not calls:  # an answer (its presentation, or to the audience), not notes while working
                     self._speak_as(e.model, text)
-            if not calls and text and e.submission and not e.presented:
+            if not calls and text and e.submitted and e.entries and not e.presented:
                 self._save_presentation(e, text)
                 self._showcase_start(e)
             if not calls:
@@ -682,13 +737,24 @@ class Arena:
                    "draw (time limit)" if d.get("status") == "timeout" else
                    "draw" if d.get("status") == "finished" else f"no result ({d.get('status')})")
             say(f"     {d.get('contest')}: {d.get('green')} vs {d.get('red')} -> {res}", "g")
-        elif name == "submit_design" and "outcome" in d:
-            e.submitted, e.design, e.submission, e.to_call = True, d["design"], d, d
-            e.qualified = e.qualified or d["outcome"] == "win"
-            how = " (time limit)" if d["outcome"] == "draw" and d.get("status") == "timeout" else ""
-            say(f"     SUBMITTED {d['design']}: {d['outcome'].upper()}{how} (score {d['score']})", "m")
-            say("     QUALIFIED for the /contest knockout" if e.qualified else
-                "     not qualified for /contest (only a win qualifies)", "m" if e.qualified else "y")
+        elif name == "submit_design" and d.get("design") and not d.get("error"):
+            self._took(e, d)
+            n = len(self.plan.rounds)
+            if "outcome" in d:
+                e.to_call = d
+                how = " (time limit)" if d["outcome"] == "draw" and d.get("status") == "timeout" else ""
+                say(f"     SUBMITTED {d['design']} for round {d['round']} of {n}: {d['outcome'].upper()}{how} "
+                    f"(score {d['score']})", "m")
+                if d.get("round", 1) == 1:
+                    say("     QUALIFIED for the /contest knockout" if e.qualified else
+                        "     not qualified (it needed a round 1 qualifying win)", "m" if e.qualified else "y")
+                elif d["outcome"] != "win":
+                    say("     lost its qualifying game: it forfeits this round's knockout match", "y")
+            elif d.get("round") is None:
+                say(f"     TEAM ZOOK {len(e.entries)} of {n}: {d['design']}", "m")
+            else:
+                contest = "" if self.plan.hidden else f" ({self.plan.rounds[d['round'] - 1].contest})"
+                say(f"     PUT FORWARD {d['design']} for round {d['round']} of {n}{contest}", "m")
         if isinstance(d.get("budget"), dict) and d["budget"].get("reminder"):
             say(f"     {d['budget']['reminder']}", "y")
 
@@ -741,20 +807,15 @@ class Arena:
     def _save_presentation(self, e: Entrant, text: str) -> None:
         """Zook Entries/<model>/Presentation - <challenge>.txt: the model's presentation of its
         challenger, under a header with the facts (design, result, runs, cost; no video links)."""
-        s = e.submission or {}
         folder = self.cfg.zoo_dir / entrant_folder(e.model)
         state = ChallengeState(self.challenge, folder)
-        game = s.get("game") or {}
-        how = " (time limit)" if s.get("outcome") == "draw" and s.get("status") == "timeout" else ""
         header = [
             f"BAMZOOKi Arena - {e.model} presents its challenger",
-            f"Challenge:       {self.challenge.title} ({self.challenge.name})",
+            f"Challenge:       {self.challenge.title} ({self.challenge.name}){self._rounds_line()}",
             f"Date:            {time.strftime('%Y-%m-%d %H:%M')}",
-            f"Submitted Zook:  {s.get('design', '?')}",
-            f"Challenge game:  {game.get('contest', '?')} v {game.get('opponent', '?')}: "
-            f"{str(s.get('outcome', '?')).upper()}{how}, score {s.get('score', '?')}"
-            + ("  -> qualified for the knockout" if e.qualified else ""),
-            f"Test runs used:  {state.runs_used} of {self.challenge.runs or 'unlimited'}",
+            *[f"Put forward:     {_entry_line(x)}" for x in e.entries],
+            f"Knockout:        {'qualified' if e.qualified else 'not qualified'}",
+            f"Test runs used:  {state.total_runs_used}",
             f"Tokens / cost:   {e.tokens:,} / ${e.cost:.4f}",
         ]
         path = folder / f"Presentation - {self.challenge.name}.txt"
@@ -766,12 +827,35 @@ class Arena:
         except OSError as err:
             say(f"    [couldn't save the presentation: {err}]", "y")
 
-    def _winning_submission(self, folder: str) -> dict | None:
-        d = self.cfg.zoo_dir / folder
-        if not (d / f"challenge-{self.challenge.name}.json").exists():
-            return None
-        subs = ChallengeState(self.challenge, d).data.get("submissions", [])
-        return next((s for s in subs if s.get("outcome") == "win"), None)
+    def _restore(self, e: Entrant) -> None:
+        """Submissions saved by an earlier session (--keep-entries) count: the model carries on from them."""
+        d = self.cfg.zoo_dir / entrant_folder(e.model)
+        if (d / f"challenge-{self.challenge.name}.json").exists():
+            for sub in ChallengeState(self.challenge, d).submissions:
+                self._took(e, sub)
+
+    def _took(self, e: Entrant, d: dict) -> None:
+        """A Zook put forward: remember it, and whether the model is now in the knockout and done."""
+        e.entries.append(d)
+        e.design, e.submission = d["design"], d
+        if not self.plan.round_by_round or d.get("round") == 1:  # short rules: round 1 gets a model in
+            e.qualified = e.qualified or (d.get("outcome") == "win" if self.plan.qualifying else True)
+        e.submitted = self._submitted(e)
+
+    def _submitted(self, e: Entrant) -> bool:
+        """Has it put forward every Zook it owes now: the open round's (short rules), or all of them?"""
+        if self.plan.round_by_round:
+            return e.for_round((self.plan.current or 0) + 1) is not None
+        return len(e.entries) >= len(self.plan.rounds)
+
+    @property
+    def cap(self) -> int | None:
+        """Models in the knockout at most (the rules' max_qualifiers; None = no limit)."""
+        return self.plan.rules.max_qualifiers
+
+    def _field_full(self) -> bool:
+        """The knockout's places are all taken (max_qualifiers): no more challengers are called."""
+        return bool(self.cap) and sum(e.qualified for e in self.entrants.values()) >= self.cap
 
     # --- commands ---
     def leaderboard(self) -> None:
@@ -781,16 +865,17 @@ class Arena:
             for d in root.iterdir():
                 if (d / f"challenge-{self.challenge.name}.json").exists():
                     st = ChallengeState(self.challenge, d)
-                    subs = st.data.get("submissions", [])
-                    best = max(subs, key=lambda s: s.get("score", 0)) if subs else None
-                    rows.append((best["score"] if best else -1, d.name, best, st.runs_used))
+                    subs = st.submissions
+                    score = sum(x.get("score", 0) for x in subs) if self.plan.qualifying else len(subs)
+                    ok = (any(x.get("outcome") == "win" and x.get("round") == 1 for x in subs)
+                          if self.plan.qualifying else bool(subs))
+                    rows.append((score, d.name, subs, st.total_runs_used, ok))
         say(f"\n  Leaderboard - {self.challenge.title}", "b")
         if not rows:
             say("  (no entrants yet)", "dim")
-        for score, name, best, used in sorted(rows, key=lambda r: -r[0]):
-            res = f"{best['outcome'].upper():5s} score {best['score']}  with {best['design']}" if best else "not submitted"
-            q = "  qualified" if best and best["outcome"] == "win" else ""
-            say(f"  {name:45s} {res}  ({used} runs){q}")
+        for score, name, subs, used, ok in sorted(rows, key=lambda r: -r[0]):
+            res = "; ".join(_entry_line(x) for x in subs) or "not submitted"
+            say(f"  {name:45s} {res}  ({used} runs){'  qualified' if ok else ''}")
 
     def hall(self) -> None:
         """/halloffame: the knockout champions added so far, and the most titles."""
@@ -830,15 +915,30 @@ class Arena:
         await self.contest(picked, exhibition=True)
 
     async def contest(self, seats: list[tournament.Seat] | None = None, exhibition: bool = False) -> None:
-        """Knockout between the Zooks that won their challenge game this session, then the
-        winner's speech; the audience's next messages go to the winner. exhibition: one match
-        between the two given seats, without the speech or a ranking."""
+        """Knockout between this session's qualified models, then the winner's speech; the audience's
+        next messages go to the winner. Each round plays its contest (Session.knockout_round: the final
+        is the last round; a random one is drawn as the round starts, the same for all its matches), and
+        in each match a model plays the Zook it put forward for that round, or picks one when the
+        contest is announced (hidden challenges: each team Zook once). A model with no Zook for the
+        round (or no team Zook left, or, qualifying in every round, a lost qualifying game) forfeits
+        the match. Short rules: the rounds are fitted to the field first (Session.fit), and before
+        each round after the first the models still in design their Zook for it (design_round).
+        A field that isn't a power of two has byes in the first round, for the best qualifiers.
+        exhibition: one match between the two given seats on the last round's contest, without the
+        speech or a ranking."""
         self._showcase_stop()
+        seeded = False
         if seats is None:
-            seats = [tournament.Seat(e.model, e.design) for e in self.entrants.values() if e.qualified and e.design]
+            ranked = self._seeding([e for e in self.entrants.values() if e.qualified and e.design])
+            if self.cap and len(ranked) > self.cap:
+                say(f"{len(ranked)} models qualified; the knockout takes the first {self.cap} (max_qualifiers).", "y")
+                ranked = ranked[:self.cap]
+            seats = [tournament.Seat(e.model, e.design) for e in ranked]
+            seeded = self.plan.qualifying  # the byes go to the best qualifiers (else to random models)
         if len(seats) < 2:
             names = ", ".join(s.billing() for s in seats) or "nobody yet"
-            say(f"A contest needs two qualified Zooks (a win in the challenge game); qualified: {names}.", "y")
+            how = ("a round 1 qualifying win" if self.plan.qualifying else "Zooks put forward")
+            say(f"A contest needs two qualified models ({how}); qualified: {names}.", "y")
             return
         from .runner import Engine, Job, contests
         from .sdk.store import Zoo
@@ -846,32 +946,99 @@ class Arena:
         engine = Engine()
         engine.prepare()
         zoo = Zoo(engine.install, examples_root=engine.root / "Teams" / "examples" / "Creatures")
-        info = contests.find(self.challenge.evaluation.contest, engine.install)
-        event = f"{info.name} {'exhibition' if exhibition else 'knockout'}"
-        track = music.pick_track(music.load_tracks(), self.challenge)  # live under each game, and in the reel
-
-        now = {"round": "", "game": 0, "last": None}  # video titles; the last game's (video, finish)
+        pool = [n for n, c in contests.catalog(engine.install).items() if c.players == 2 and c.in_pack]
+        if self.plan.round_by_round and not exhibition:
+            total = tournament.rounds_needed(len(seats))
+            for change in self.plan.fit(total, pool, zoo.example_names()):
+                say(f"  {len(seats)} models in the knockout need {total} round(s): {change}", "y")
+            self.save_session()
+        tracks = music.load_tracks()
+        kind = "exhibition" if exhibition else "knockout"
+        # the round's contest and music, its session round ("slot", 1-based; None = an extra early
+        # round), video titles, and the last game's (video, finish)
+        now = {"round": "", "game": 0, "last": None, "info": None, "event": "", "track": None, "slot": None}
+        played: list[str] = []  # this knockout's contests, round by round
+        used: dict[str, set[str]] = {s.model: set() for s in seats}  # team Zooks already played (hidden)
         reel: list[showtime.ReelGame] = []  # every game, for the highlights
-        cards = {s.model: showtime.zook_card(self.cfg.zoo_dir, s.zook) for s in seats}
+        cards: dict[str, showtime.ZookCard] = {}  # each model's card for the Zook it's playing now
         picks = [0, 0]  # the audience's /pick predictions: right, made
         pictures = Path(tempfile.mkdtemp(prefix="bamzooki-knockout-"))  # end-of-game stills, deleted after
+        loop = asyncio.get_running_loop()
+        matches = [len(seats) - 1]  # matches still to play (a knockout of n has n - 1), to word the prompt
+
+        def start_round(index: int, total: int, round_name: str, field: list[tournament.Seat]) -> None:
+            """The round's contest: the session's round for it, or drawn at random now (not one played
+            or still to come while there are others), announced to everyone. Short rules, after the
+            first round: the models still in design their Zook for it first (told the contest when
+            it's visible; hidden, it's drawn and announced once their Zooks are in)."""
+            if exhibition:
+                index, total = 0, 1
+            slot = len(self.plan.rounds) - total + index
+            m = self.plan.rounds[slot] if slot >= 0 else None
+            now.update(slot=slot + 1 if m else None)
+            label = "ANNOUNCER" if self.announcer else "ROUND"
+            design = self.plan.round_by_round and index > 0 and m is not None and not exhibition
+
+            def contest_of_round() -> str:
+                name = m.contest if m and m.contest else ""
+                if not name:
+                    ahead = {r.contest for r in self.plan.rounds[max(slot + 1, 0):]}
+                    name = random.choice([c for c in pool if c not in played and c not in ahead]
+                                         or [c for c in pool if c not in played] or pool)
+                info = contests.find(name, engine.install)
+                played.append(info.name)
+                now.update(info=info, event=f"{info.name} {kind}",
+                           track=music.pick_track(tracks, self.challenge, info.name))
+                return info.name
+
+            if design and not self.plan.hidden:
+                name = contest_of_round()
+                self._announce(f"{round_name}! This round's contest is {name}, and the {len(field)} models still in "
+                               f"now design a new Zook for it.", label)
+            elif design:
+                self._announce(f"{round_name}! The {len(field)} models still in now design a new Zook for it, "
+                               f"without knowing the contest.", label)
+            if design:
+                asyncio.run_coroutine_threadsafe(self.design_round(field, slot, round_name), loop).result()
+            if not design or self.plan.hidden:
+                self._announce(f"{round_name}! This round's contest is {contest_of_round()}.", label)
+
+        def pick(a: tournament.Seat, b: tournament.Seat, round_name: str) -> tuple[str | None, str | None]:
+            """Each side's Zook for the match; None = it has none for this round and forfeits (then
+            the other isn't asked, and plays nothing from its team)."""
+            options = {s.model: self._knockout_options(self.entrants[s.model], now["slot"], used[s.model],
+                                                       exhibition) for s in (a, b)}
+            if not (options[a.model] and options[b.model]):
+                now["forfeits"] = {s.model: self._forfeit_reason(self.entrants[s.model], now["slot"])
+                                   for s in (a, b) if not options[s.model]}
+                # the side that can play goes through with the Zook it would have played (its round's own)
+                return tuple(None if not options[s.model] else options[s.model][0] if len(options[s.model]) == 1
+                             else s.zook for s in (a, b))  # type: ignore[return-value]
+            return tuple(asyncio.run_coroutine_threadsafe(  # type: ignore[return-value]
+                self.choose_zook(me, opp, now, round_name, options[me.model],
+                                 used[me.model] if self.plan.team and now["slot"] and not exhibition else None),
+                loop).result()
+                for me, opp in ((a, b), (b, a)))
 
         def play(green: tournament.Seat, red: tournament.Seat, seed: int) -> tuple[str, str | None, str]:
+            self._selection_stop()  # the selection screen gives way to the game
+            info = now["info"]
             job = Job(info, zoo.resolve(green.zook).path, zoo.resolve(red.zook).path, seed=seed,
                       duration=self.challenge.time_limit, video=True, model="Tournament", countdown=True,
-                      music=track, live_sound=self.show,  # the videos get the sound either way
+                      music=now["track"], live_sound=self.show,  # the videos get the sound either way
                       position=self.position, view_fit=self.view_fit, fullscreen=self.fullscreen)
             if self.commentator:
                 from .commentary import Commentator
 
-                job.commentary = Commentator(self.api_key, self._commentary_brief(event, now["round"], green, red, cards),
+                job.commentary = Commentator(self.api_key,
+                                             self._commentary_brief(now["event"], now["round"], green, red, cards),
                                              lambda line: self._announce(line, "COMMENTARY", live=True),
                                              model=self.commentator, duration=self.challenge.time_limit)
             r = engine.run(job, name=f"cup-{info.contest_file}")
             now["game"] += 1
             now["last"] = (r.video, r.finish_time, r.video_lead) if r.video else None
             if r.video:  # for the highlights, and a copy for each competitor beside its test videos
-                reel.append(showtime.ReelGame(r.video, f"{event} - {now['round']} - game {now['game']}",
+                reel.append(showtime.ReelGame(r.video, f"{now['event']} - {now['round']} - game {now['game']}",
                                               (green.model, green.zook_name), (red.model, red.zook_name)))
                 for me, opp in ((green, red), (red, green)):
                     if me.folder == "examples":
@@ -879,17 +1046,20 @@ class Arena:
                     _keep_video(r.video, self.cfg.zoo_dir / me.folder / "Videos",
                                 f"{'Exhibition' if exhibition else 'Knockout ' + now['round']} game {now['game']} - "
                                 f"{self.challenge.name} - {info.name} - "
-                                f"{me.zook_name} vs {opp.zook_name} ({opp.model}) - seed {seed}")
+                                f"{me.zook_name} vs {opp.zook_name} ({opp.model})")
             return r.status, r.winner, _game_stats(r, green.zook_name, red.zook_name)
 
-        loop = asyncio.get_running_loop()
-        matches = [len(seats) - 1]  # matches still to play (a knockout of n has n - 1), to word the prompt
-
         def before(a: tournament.Seat, b: tournament.Seat, round_name: str) -> None:
-            """The tale of the tape and the announcer's build-up; both models see the other's Zook and
-            comment (the second hears the first), then the audience may answer."""
+            """The selection screen (several rounds), the tale of the tape and the announcer's build-up;
+            both models see the other's Zook and comment (the second hears the first), then the audience
+            may answer."""
             # "Semi-finals" -> "Semi-final" for one match's videos
             now["round"], now["game"] = round_name[:-1] if round_name.endswith("finals") else round_name, 0
+            for s in (a, b):
+                cards[s.model] = showtime.zook_card(self.cfg.zoo_dir, s.zook)
+            if len(self.plan.rounds) > 1:
+                self._selection_start(zoo, now["info"].name, a, b, f"{round_name}: {now['info'].name}")
+            event = now["event"]
 
             async def talk():
                 await self.preview_match(event, round_name, a, b, cards[a.model], cards[b.model], pictures)
@@ -902,6 +1072,14 @@ class Arena:
 
         def after(bout: tournament.Bout) -> None:
             matches[0] -= 1
+            if not bout.games:  # a forfeit: no game to talk about
+                win, lose = _short_name(bout.winner.model), _short_name(bout.loser.model)
+                why = now.pop("forfeits", {})
+                self._announce(f"Neither {win} nor {lose} can play this round! A coin toss sends {win} through."
+                               if bout.how == "both forfeit" else
+                               f"{lose} {why.get(bout.loser.model, 'has no Zook for this round')} and forfeits: "
+                               f"{win} goes through without a game.", "ANNOUNCER" if self.announcer else "ROUND")
+                return
             result = (f"{bout.winner.billing()} beat {bout.loser.billing()} in {len(bout.games)} game(s)"
                       + (" on a coin toss" if bout.how == "coin toss" else ""))
             nxt = "for the next match" if matches[0] else "to finish" if exhibition else "for the final ranking"
@@ -912,6 +1090,7 @@ class Arena:
                 say(f"\n  The audience picked {picked.zook_name}: "
                     + ("called it!" if right else "wrong this time."), "m" if right else "y")
                 result += f". The audience had picked {picked.zook_name}" + (" and called it" if right else "")
+            event = now["event"]
 
             async def talk():
                 await self.post_match(event, now["round"], bout, result, last, pictures,
@@ -919,47 +1098,64 @@ class Arena:
                 await self.match_talk([bout.a, bout.b], f"{event}, just played: {result}", nxt)
             asyncio.run_coroutine_threadsafe(talk(), loop).result()
 
-        say(f"\n*** THE {event.upper()}: " + ("an exhibition match ***" if exhibition else
-                                              f"{len(seats)} qualified Zooks ***"), "b")
+        title = "an exhibition match" if exhibition else f"{len(seats)} qualified models"
+        say(f"\n*** THE {kind.upper()}: {title} ***", "b")
         for s in seats:
-            say(f"    {s.billing()}  [{s.zook}]")
+            e = self.entrants[s.model]
+            say(f"    {s.model}  [{', '.join(z.split('/', 1)[-1] for z in e.zooks()) or s.zook}]")
         say("    Leave the game window in front while the games play. Between games, talk to a model with "
             "/<its name or its Zook's name> <message>, type to both, or press Enter to go on.", "dim")
         try:
             rounds, places = await asyncio.to_thread(tournament.knockout, seats, play, say, before=before,
-                                                     after=after,
-                                                     round_title="Exhibition match" if exhibition else None)
+                                                     after=after, start_round=start_round, pick=pick,
+                                                     round_title="Exhibition match" if exhibition else None,
+                                                     seeded=seeded)
         finally:
+            self._selection_stop(0)
             shutil.rmtree(pictures, ignore_errors=True)
+            if self.plan.round_by_round and not exhibition:
+                self.plan.current = 0  # new challengers called after it design round 1 again
+                self.save_session()
         champ = places[0][1]
+        final = next(b for b in rounds[-1] if b.winner.model == champ.model)
+        champ_seat = final.winner  # with the Zook that won the last round
         if exhibition:
-            say(f"\n*** {champ.model} wins the exhibition with {champ.zook_name}! ***", "m")
+            say(f"\n*** {champ.model} wins the exhibition with {champ_seat.zook_name}! ***", "m")
             return
+        contest_label = ", ".join(dict.fromkeys(played))  # also in the highlights' file name: no slashes
         self.knockout_places, self.picks = {s.model: p for p, s in places}, picks
         say("\n  Final ranking", "b")
         for place, s in places:
-            say(f"  {place:>2}. {s.billing()}")
+            say(f"  {place:>2}. {s.model}")
         if picks[1]:
             say(f"\n  The audience's picks: {picks[0]} of {picks[1]} right", "m")
-        say(f"\n*** {champ.model} WINS THE KNOCKOUT with {champ.zook_name}! ***", "m")
+        say(f"\n*** {champ.model} WINS THE KNOCKOUT with {champ_seat.zook_name}! ***", "m")
         reel_path = None
         if len(reel) > 1:
-            name = f"{time.strftime('%Y-%m-%d_%H-%M-%S')} Knockout highlights - {self.challenge.name} - {info.name}.mp4"
+            name = (f"{time.strftime('%Y-%m-%d_%H-%M-%S')} Knockout highlights - {self.challenge.name} - "
+                    f"{contest_label}.mp4")
             if reel_path := showtime.highlights(reel, self.cfg.render_dir / "Tournament" / name,
-                                                champion=(champ.model, champ.zook_name), music=track):
+                                                champion=(champ.model, champ_seat.zook_name), music=now["track"]):
                 say(f"    highlights: {reel_path}  (/open plays it)", "dim")
 
         path = []
-        for b in (b for bouts in rounds for b in bouts if b.b is not None and champ in (b.a, b.b)):
-            other = b.b if b.a is champ else b.a
-            path.append(f"beat {other.billing()} in {len(b.games)} game(s)"
-                        + (" on a coin toss" if b.how == "coin toss" else ""))
-        standings = "; ".join(f"{p}. {s.billing()}" for p, s in places)
+        for r, bouts in enumerate(rounds):
+            for b in bouts:
+                if b.b is None or champ.model not in (b.a.model, b.b.model):
+                    continue
+                mine, other = (b.a, b.b) if b.a.model == champ.model else (b.b, b.a)
+                if not b.games:
+                    path.append(f"went through at {played[r]} when {other.model} forfeited"
+                                + (" (neither had a Zook; a coin toss)" if b.how == "both forfeit" else ""))
+                    continue
+                path.append(f"beat {other.billing()} at {played[r]} with {mine.zook_name} in {len(b.games)} game(s)"
+                            + (" on a coin toss" if b.how == "coin toss" else ""))
+        standings = "; ".join(f"{p}. {s.model}" for p, s in places)
         record = showtime.arena_record(showtime.hall_of_fame(self.arena_dir), champ.model) if self.show else None
-        if await self.confirm(f"\nAdd {champ.billing()} to the Hall of Fame? [y/N] "):
+        if await self.confirm(f"\nAdd {champ_seat.billing()} to the Hall of Fame? [y/N] "):
             showtime.record_champion(self.arena_dir, {
-                "challenge": self.challenge.title, "contest": info.name, "champion": champ.model,
-                "zook": champ.zook, "zook_name": champ.zook_name, "field": len(seats),
+                "challenge": self.challenge.title, "contest": contest_label, "champion": champ.model,
+                "zook": champ_seat.zook, "zook_name": champ_seat.zook_name, "field": len(seats),
                 "runner_up": places[1][1].model if len(places) > 1 else None, "path": path})
             say(f"    added to the Hall of Fame ({self.arena_dir / showtime.HALL_OF_FAME})", "m")
         else:
@@ -968,7 +1164,125 @@ class Arena:
             standings += f". Its record before tonight: {record}"
         if reel:  # /open plays the highlights (else the last game)
             self.entrants[champ.model].last_media = [str(reel_path or reel[-1].video)]
-        await self.crown(champ, info.name, path, standings)
+        await self.crown(champ_seat, contest_label, path, standings)
+
+    def _knockout_options(self, e: Entrant, slot: int | None, used: set[str], exhibition: bool) -> list[str]:
+        """The Zooks a model may play in a knockout round; none = it forfeits the match. Visible: the
+        one it put forward for the round. Hidden: its team Zooks not played yet. An extra early round
+        (more knockout rounds than challenges) or an exhibition: any of its Zooks."""
+        if exhibition or slot is None:
+            return e.zooks() or ([e.design] if e.design else [])
+        if self.plan.team:
+            return [z for z in e.zooks() if z not in used]
+        x = next((x for x in e.entries if x.get("round") == slot), None)
+        if not x or (slot > 1 and self.plan.qualifying_in(slot) and x.get("outcome") != "win"):
+            return []  # nothing put forward for the round, or its qualifying game lost
+        return [x["design"]]
+
+    def _forfeit_reason(self, e: Entrant, slot: int | None) -> str:
+        """Why a model can't play its match (for the announcer): '<model> {reason} and forfeits'."""
+        if self.plan.team:
+            return "has no team Zook left to play"
+        x = next((x for x in e.entries if x.get("round") == slot), None)
+        return "lost its qualifying game for this round" if x else "has no Zook for this round"
+
+    def _seeding(self, entrants: list[Entrant]) -> list[Entrant]:
+        """The knockout's entrants, best first: with qualifying, by round 1's qualifying score, then the
+        fewest test runs used; otherwise in the order they qualified."""
+        if not self.plan.qualifying:
+            return list(entrants)
+
+        def key(e: Entrant):
+            score = sum(x.get("score", 0) for x in e.entries if x.get("round") == 1)
+            runs = ChallengeState(self.challenge, self.cfg.zoo_dir / entrant_folder(e.model)).total_runs_used
+            return -score, runs
+        return sorted(entrants, key=key)
+
+    async def design_round(self, seats: list[tournament.Seat], slot: int, round_name: str) -> None:
+        """Short rules: the design phase before a knockout round. The models still in design their Zook
+        for it in turn, each carrying on its own conversation, with the round's limits afresh (their
+        MCP servers read the open round from the session file)."""
+        self.plan.current = slot
+        self.save_session()
+        for s in seats:
+            await self._safely(self.design(self.entrants[s.model], slot, round_name))
+            await self._settle(4 if self.show else 0)
+        self._showcase_stop()
+        await self._disconnect()
+
+    async def design(self, e: Entrant, slot: int, round_name: str) -> None:
+        """One model's design phase for a later round (see design_round)."""
+        self._showcase_stop()
+        self.entrant = e
+        e.submitted, e.presented = False, False
+        m, k, n = self.plan.rounds[slot], slot + 1, len(self.plan.rounds)
+        round_name = round_name[:-1] if round_name.endswith("finals") else round_name  # one match each
+        say(f"\n=== {round_name} design phase: {e.model} ===", "b")
+        say(f"    round {k} of {n}" + ("  |  contest secret" if self.plan.hidden else
+                                       self._game_and_map(m.contest) + f"  |  opponent: {m.opponent}"), "dim")
+        await self._connect(e.model)
+        what = ("the contest is still SECRET: it's announced once every model's Zook for this round is in, so design "
+                "a Zook that can handle different contests" if self.plan.hidden else
+                f"the contest is {m.contest} and the Zook to beat is {m.opponent} (read its rules with get_contest)")
+        qualifying = (f"When you submit it, it plays this round's qualifying game against {m.opponent}: you must WIN "
+                      f"it to play your knockout match, or you forfeit. " if self.plan.qualifying_in(k) else "")
+        kickoff = ROUND_KICKOFF.format(round=round_name, k=k, n=n, what=what, qualifying=qualifying)
+        e.messages.append({"role": "user", "content": kickoff + self._presentation_limit()})
+        self._log("runner", kickoff)
+        await self.converse(nudges=3)
+
+    async def choose_zook(self, me: tournament.Seat, opp: tournament.Seat, now: dict, round_name: str,
+                          options: list[str], used: set[str] | None = None) -> str:
+        """The Zook a model plays in this round's match, from its options (_knockout_options): the
+        only one, or the one it picks (asked in its own conversation; the opponent's pick isn't shown
+        to it). used: hidden challenges' team Zooks already played, which the choice joins."""
+        e, info = self.entrants[me.model], now["info"]
+        choice = options[0]
+        if len(options) == 1 and not self.plan.team:
+            say(f"  {me.model} plays {choice.split('/', 1)[-1]}, its Zook for {info.name}", "dim")
+            return choice
+        if len(options) > 1:
+            from .runner.contests import RULES
+
+            once = (" Each team Zook can be played only once" + (
+                f" (already played: {', '.join(z.split('/', 1)[-1] for z in sorted(used))})" if used else "") + "."
+                    if used is not None else "")
+            reply = await self._ask(e, CHOOSE.format(
+                event=now["event"], round=round_name, contest=info.name, rules=RULES.get(info.contest_file, ""),
+                opp=f"{opp.model}", options=", ".join(z.split("/", 1)[-1] for z in options), once=once))
+            choice = _match_zook(reply, options) or choice
+        if used is not None:
+            used.add(choice)
+        say(f"  {me.model} picks {choice.split('/', 1)[-1]} for {info.name}", "m")
+        return choice
+
+    def _selection_start(self, zoo, contest: str, a: tournament.Seat, b: tournament.Seat, title: str) -> None:
+        """The Simulator's Zook selection screen for the next match (green a, red b), in the game window,
+        until the match starts."""
+        self._selection_stop(0)
+        from .runner import Engine
+
+        try:
+            engine = Engine()
+            zooks = [(zoo.resolve(s.zook).path, f"{s.zook_name} ({_short_name(s.model)})") for s in (a, b)]
+        except Exception as err:  # the show goes on without it
+            say(f"    [no selection screen: {err}]", "dim")
+            return
+        cancel = threading.Event()
+        thread = threading.Thread(target=engine.selection, args=(contest, zooks, cancel), daemon=True,
+                                  kwargs={"title": title, "caption": f"Up next: {a.zook_name} v {b.zook_name}",
+                                          "position": self.position, "fullscreen": self.fullscreen})
+        thread.start()
+        self._selection = (thread, cancel, time.time())
+
+    def _selection_stop(self, shown: float = SELECTION_SECONDS) -> None:
+        """Close the selection screen, once it has been up for at least `shown` seconds."""
+        if selection := getattr(self, "_selection", None):
+            thread, cancel, started = selection
+            time.sleep(max(0.0, shown - (time.time() - started)))
+            cancel.set()
+            thread.join(timeout=15)
+            self._selection = None
 
     async def crown(self, champ: tournament.Seat, contest: str, path: list[str], standings: str) -> None:
         """The champion takes the floor: with --showtime the announcer crowns it and it gives a
@@ -1064,7 +1378,16 @@ class Arena:
                      images: list[dict | None] | None = None) -> str:
         """A contestant's answer in its own conversation (no tools): printed and returned. The
         pre-match comment is held to one line. Pictures go only to models that can see them."""
-        e = self.entrants[seat.model]
+        line = await self._ask(self.entrants[seat.model], prompt, images, one_line)
+        say(f"\n  {seat.model} ({seat.zook_name}): ", "c", end="")
+        say(line or "(no comment)")
+        self._speak_as(seat.model, line)
+        return line
+
+    async def _ask(self, e: Entrant, prompt: str, images: list[dict | None] | None = None,
+                   one_line: bool = False) -> str:
+        """A contestant's answer in its own conversation (no tools), kept in its history; "" if the
+        call fails. Pictures go only to models that can see them."""
         images = [i for i in images or [] if i] if e.vision else []
         content = [{"type": "text", "text": prompt}, *images] if images else prompt
         e.messages.append({"role": "user", "content": content})
@@ -1076,7 +1399,7 @@ class Arena:
                                           tool_choice="none")
         except (RuntimeError, httpx.HTTPError) as err:
             e.messages.pop()
-            say(f"\n  [{seat.billing()} has nothing to say: {err}]", "r")
+            say(f"\n  [{e.model} has nothing to say: {err}]", "r")
             return ""
         usage = data.get("usage") or {}
         e.cost += float(usage.get("cost") or 0)
@@ -1086,9 +1409,6 @@ class Arena:
         line = _one_line(text) if one_line else text
         e.messages.append({"role": "assistant", "content": line or "(no comment)"})
         self._log("model", line, e)
-        say(f"\n  {seat.model} ({seat.zook_name}): ", "c", end="")
-        say(line or "(no comment)")
-        self._speak_as(seat.model, line)
         return line
 
     async def match_talk(self, seats: list[tournament.Seat], context: str, enter: str,
@@ -1157,17 +1477,59 @@ class Arena:
             await asyncio.to_thread(self.voice.wait_idle)
         await asyncio.sleep(extra)
 
+    def rounds_check(self) -> tuple[bool, list[str]]:
+        """Does the queue fit the rounds? (mismatch, lines for the operator): a knockout of n models
+        has rounds_needed(n) rounds, so with fewer models rounds are skipped (full rules: the first
+        ones; short rules: those after round 1) and with more, random rounds are added (before round
+        1; short rules: after it). A field that isn't a power of two also gets first-round byes."""
+        s, r = self.plan, len(self.plan.rounds)
+        n = len(self.queue) if not self.cap else min(len(self.queue), self.cap)
+        if n < 2:  # models called by hand (/challenger) or none yet
+            return False, [f"1 model queued: the knockout needs at least two."] if n else []
+        k = tournament.rounds_needed(n)
+        lines = []
+        if k != r:
+            lines.append(f"{n} models queued{' (if they all qualify)' if s.qualifying else ''} for {r} round(s), but "
+                         f"a knockout of {n} has {k} round(s):")
+        if k < r:
+            gone = list(enumerate(s.rounds, 1))
+            gone = gone[1:] if s.round_by_round and k == 1 else gone[1:1 + r - k] if s.round_by_round else gone[:r - k]
+            lines.append(f"{r - k} round(s) will be skipped: "
+                         + ", ".join(f"round {i}" + ("" if s.hidden else f" ({m.contest})") for i, m in gone)
+                         + (" (only round 1 is played)" if s.round_by_round and k == 1 else ""))
+        elif k > r:
+            lines.append(f"{k - r} extra random round(s) will be added "
+                         + ("after round 1" if s.round_by_round else "before round 1") + ".")
+        mismatch = bool(lines)
+        if n != 2 ** k:
+            lines.append(f"{2 ** k - n} model(s) will get a bye in the first round "
+                         + ("(the best qualifiers)." if s.qualifying else "(at random)."))
+        return mismatch, lines
+
+    async def check_rounds(self) -> bool:
+        """At the start: tell the operator if the queue doesn't match the rounds, and ask to carry on."""
+        mismatch, lines = self.rounds_check()
+        if not lines:
+            return True
+        say("\nThe queue doesn't match the rounds!" if mismatch else "", "y" if mismatch else "")
+        for line in lines:
+            say(f"  {line}", "y" if mismatch else "dim")
+        return not mismatch or await self.confirm("Carry on with these rounds? [y/N] ")
+
     async def offer_contest(self) -> None:
-        """When the queue has run out, ask whether to play the knockout now."""
-        if self.queue or not self.keyboard or self.ending:
+        """When the queue has run out, or the knockout is full (max_qualifiers), ask whether to play
+        the knockout now."""
+        full = self._field_full()
+        if (self.queue and not full) or not self.keyboard or self.ending:
             return
         qualified = [e for e in self.entrants.values() if e.qualified and e.design]
         if len(qualified) < 2:
             say(f"\nThe queue is empty. {len(qualified)} model(s) qualified: /contest needs two "
                 "(add more with /challenger <model>).", "dim")
             return
-        if await self.confirm(f"\nThe queue is empty and {len(qualified)} models have qualified. "
-                              "Run the knockout contest now? [Y/N] "):
+        why = (f"The knockout is full ({self.cap} qualified, max_qualifiers)" if full else
+               f"The queue is empty and {len(qualified)} models have qualified")
+        if await self.confirm(f"\n{why}. Run the knockout contest now? [Y/N] "):
             await self.contest()
         else:
             say("No contest for now: /contest starts it whenever you like.", "dim")
@@ -1188,10 +1550,17 @@ class Arena:
         say("You can type while a model works: it gets your message after its current step (/stop halts it).",
             "dim")
         self.keyboard = Keyboard()
+        if not await self.check_rounds():
+            say("Change the queue ([arena] challengers) or the rounds ([arena] contest / opponent) and start again.",
+                "y")
+            return
         if self.auto:  # the whole show, unattended: every challenger, the knockout, the champion, the table
-            while self.queue:
+            while self.queue and not self._field_full():
                 await self._safely(self.start(self.queue.pop(0)))
                 await self._settle(10 if self.show and not self.voice else 4)  # the presentation plays out
+            if self.queue:
+                say(f"\nThe knockout is full ({self.cap} qualified, max_qualifiers): not called: "
+                    f"{', '.join(self.queue)}.", "y")
             self._showcase_stop()
             self.leaderboard()
             await self._safely(self.offer_contest())
@@ -1221,10 +1590,16 @@ class Arena:
                 if not self.queue:
                     say("The queue is empty: use /challenger <openrouter model id>.", "y")
                     continue
+                if self._field_full():
+                    say(f"The knockout is full ({self.cap} qualified, max_qualifiers): /contest starts it.", "y")
+                    continue
                 await self.call(self.queue.pop(0))
             elif cmd == "/challenger":
                 if not arg:
                     say("usage: /challenger <openrouter model id>, e.g. /challenger openai/gpt-5", "y")
+                    continue
+                if self._field_full():
+                    say(f"The knockout is full ({self.cap} qualified, max_qualifiers): /contest starts it.", "y")
                     continue
                 await self.call(arg.strip())
             elif cmd == "/end":
@@ -1276,9 +1651,7 @@ class Arena:
         """The session in a few sentences (for the announcer): each model's result and the knockout."""
         parts = []
         for e in self.entrants.values():
-            s = e.submission or {}
-            zook = (e.design or "").split("/", 1)[-1].split("@", 1)[0]
-            res = f"{str(s.get('outcome')).upper()} in its challenge game with {zook}" if s else "didn't submit"
+            res = "; ".join(_entry_line(x) for x in e.entries) or "didn't submit"
             if e.model in self.knockout_places:
                 res += f", {_place(self.knockout_places, e.model)} in the knockout"
             parts.append(f"{e.model}: {res}.")
@@ -1300,23 +1673,20 @@ class Arena:
             return None
         rows = []
         for e in self.entrants.values():
-            s = e.submission or {}
-            outcome = str(s.get("outcome", "")).upper()
-            if outcome == "DRAW" and s.get("status") == "timeout":
-                outcome += " (time limit)"
-            runs = ChallengeState(self.challenge, self.cfg.zoo_dir / entrant_folder(e.model)).runs_used
-            rows.append([e.model, (e.design or "-").split("/", 1)[-1], outcome or "not submitted",
-                         f"{s['score']:g}" if "score" in s else "-", "yes" if e.qualified else "no",
-                         f"{runs} of {self.challenge.runs or 'unlimited'}",
+            runs = ChallengeState(self.challenge, self.cfg.zoo_dir / entrant_folder(e.model)).total_runs_used
+            score = sum(x.get("score", 0) for x in e.entries)
+            rows.append([e.model, "; ".join(_entry_line(x) for x in e.entries) or "not submitted",
+                         f"{score:g}" if self.plan.qualifying and e.entries else "-",
+                         "yes" if e.qualified else "no", str(runs),
                          _place(self.knockout_places, e.model), f"{e.tokens:,}", f"${e.cost:.4f}"])
         tokens, cost = sum(e.tokens for e in self.entrants.values()), sum(e.cost for e in self.entrants.values())
         if host := getattr(self, "announcer", None):
-            rows.append([f"(announcer) {host.model}", "-", "-", "-", "-", "-", "-", f"{host.tokens:,}",
+            rows.append([f"(announcer) {host.model}", "-", "-", "-", "-", "-", f"{host.tokens:,}",
                          f"${host.cost:.4f}"])
             tokens, cost = tokens + host.tokens, cost + host.cost
-        total = ["TOTAL", "", "", "", f"{sum(e.qualified for e in self.entrants.values())} qualified", "", "",
+        total = ["TOTAL", "", "", f"{sum(e.qualified for e in self.entrants.values())} qualified", "", "",
                  f"{tokens:,}", f"${cost:.4f}"]
-        lines = _table(["Model", "Zook", "Challenge game", "Score", "Qualified", "Test runs", "Knockout",
+        lines = _table(["Model", "Zooks put forward", "Score", "Qualified", "Test runs", "Knockout",
                         "Tokens", "Cost"], rows, total)
         title = f"BAMZOOKi Arena - {self.challenge.title} - session ending {time.strftime('%Y-%m-%d %H:%M')}"
         say(f"\n{title}\n", "b")
@@ -1343,6 +1713,8 @@ class Arena:
             self.skip = False
             if not self.queue:
                 say("The queue is empty: /challenger <model> calls another, /contest runs the knockout.", "y")
+                break
+            if self._field_full():
                 break
             model = self.queue.pop(0)
             say(f"[moving on to {model}]", "y")
@@ -1395,6 +1767,28 @@ def _one_call_per_turn(messages: list[dict]) -> None:
                                                         "content": "(no result)"})
         i = j
     messages[:] = out
+
+
+def _match_zook(reply: str, options: list[str]) -> str | None:
+    """The option a model named in its reply ("Crusher@3" before "Crusher"; the longest name wins)."""
+    text = reply.lower()
+    for key in (lambda z: z.split("/", 1)[-1], lambda z: z.split("/", 1)[-1].split("@", 1)[0]):
+        named = [z for z in options if key(z).lower() in text]
+        if named:
+            return max(named, key=lambda z: len(key(z)))
+    return None
+
+
+def _entry_line(d: dict) -> str:
+    """One Zook put forward: 'round 1 (Zook Sumo): Crusher@3, WIN', or 'team: Crusher@3'."""
+    zook = str(d.get("design", "?")).split("/", 1)[-1]
+    if d.get("round") is None:
+        return f"team: {zook}"
+    out = f"round {d['round']} ({(d.get('game') or {}).get('contest', '?')}): {zook}"
+    if "outcome" in d:
+        how = " at the time limit" if d["outcome"] == "draw" and d.get("status") == "timeout" else ""
+        out += f", {str(d['outcome']).upper()}{how}"
+    return out
 
 
 def _one_line(text: str, limit: int = REMARK_CHARS) -> str:
@@ -1521,7 +1915,8 @@ def main(argv: list[str] | None = None) -> None:
     a_cfg = cfg.arena
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--challenger", action="append", help="OpenRouter model id (repeatable); default: [arena] challengers")
-    ap.add_argument("--challenge", help="challenge TOML (default: [arena] challenge, then bamzooki.toml challenge)")
+    ap.add_argument("--challenge", help="the rules: short, full or a TOML path (default: [arena] challenge_rules); "
+                                        "the rounds come from [arena] contest and opponent")
     ap.add_argument("--max-turns", type=int, default=int(a_cfg.get("max_turns", 120)))
     ap.add_argument("--max-tokens", type=int, default=int(a_cfg.get("max_tokens", 4000)))
     ap.add_argument("--temperature", type=float, default=a_cfg.get("temperature"))
@@ -1568,12 +1963,12 @@ def main(argv: list[str] | None = None) -> None:
         a.monitor = False  # e.g. [arena] monitor = true in the config, --full-screen on the command line
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    challenge_path = a.challenge or a_cfg.get("challenge") or cfg.challenge
-    if challenge_path and not Path(challenge_path).is_absolute():
-        challenge_path = REPO_ROOT / challenge_path
-    challenge = Challenge.load(challenge_path)
+    # The rounds are planned once (random picks included) and shared by every model; --keep-entries
+    # carries on with the saved plan.
+    saved = cfg.zoo_dir / "session.json"
+    session = Session.load(saved) if a.keep_entries and saved.exists() else plan_from_config(cfg, a.challenge)
     queue = a.challenger or list(a_cfg.get("challengers", []))
-    arena = Arena(challenge, queue, a.max_turns, a.max_tokens, a.temperature, a.auto, a.verbose, show=a.showtime,
+    arena = Arena(session, queue, a.max_turns, a.max_tokens, a.temperature, a.auto, a.verbose, show=a.showtime,
                   announcer=None if a.no_announcer or str(a.announcer).lower() in ("", "none", "off") else a.announcer,
                   announcer_style=a.announcer_style, speak=a.speak, voice=a.voice, monitor=a.monitor,
                   fullscreen=a.full_screen,
@@ -1581,4 +1976,7 @@ def main(argv: list[str] | None = None) -> None:
     if not a.keep_entries and (moved := arena.archive_entries()):
         say(f"Previous Zook Entries archived to {moved}: every model starts afresh (--keep-entries to carry on).",
             "dim")
+    arena.save_session()
+    say(f"Rules: {session.rules.name}{' (challenges hidden)' if session.hidden else ''}"
+        f"{arena._rounds_line() if not session.hidden else ''}", "dim")
     asyncio.run(arena.repl())

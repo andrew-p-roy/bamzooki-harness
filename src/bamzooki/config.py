@@ -47,7 +47,7 @@ class Config:
     arena_dir: Path = DEFAULT_ARENA  # models' output, kept outside the repo
     render_dir: Path | None = None  # None = <arena_dir>/Renders
     zoo_dir: Path | None = None  # None = <arena_dir>/Zook Entries
-    challenge: Path | None = None  # challenge TOML (None = challenges/default.toml)
+    challenge: Path | None = None  # rules TOML when [arena] challenge_rules isn't set (None = short)
     arena: dict = field(default_factory=dict)  # [arena] table for tools/arena.py
     source: Path | None = None  # config file that was read, if any
 

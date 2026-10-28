@@ -5,7 +5,7 @@
 
 --model is the entrant's full model name (as in Zook Entries, with "/" or "_").
 
-The challenge file defaults to bamzooki.toml's `challenge` or challenges/default.toml.
+--challenge is the rules (short, full or a path); default: bamzooki.toml [arena] challenge_rules.
 """
 
 from __future__ import annotations
@@ -29,16 +29,16 @@ def main() -> int:
     ap.add_argument("--challenge")
     a = ap.parse_args()
     cfg = load_config()
-    challenge = Challenge.load(a.challenge or cfg.challenge)
+    challenge = Challenge.load(a.challenge or cfg.arena.get("challenge_rules") or cfg.challenge)
     state = ChallengeState(challenge, cfg.zoo_dir / entrant_folder(a.model))
     if a.action == "reset":
         state.reset()
         print(f"reset {a.model} in challenge {challenge.name!r}: {challenge.runs or 'unlimited'} runs available")
         return 0
-    print(json.dumps({"challenge": challenge.name, "file": str(challenge.path), **state.budget(),
-                      "log": state.data["log"][-10:],
-                      "submissions": [{k: s.get(k) for k in ("design", "outcome", "score", "time")}
-                                      for s in state.data["submissions"]]}, indent=1))
+    print(json.dumps({"challenge": challenge.name, "file": str(challenge.path), "round": state.round + 1,
+                      **state.budget(), "log": state.data["log"][-10:],
+                      "submissions": [{k: s.get(k) for k in ("design", "round", "outcome", "score", "time")}
+                                      for s in state.submissions]}, indent=1))
     return 0
 
 

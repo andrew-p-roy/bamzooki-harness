@@ -1,15 +1,24 @@
-# Default challenge for a model designing Zooks. Copy this file to make your own and point to it
-# with `challenge = "challenges/<file>.toml"` in bamzooki.toml, BAMZOOKI_CHALLENGE, or
-# `python -m bamzooki.mcp_server --challenge <file>`.
+# Short rules: chosen with `challenge_rules = "short"` in bamzooki.toml [arena], which also sets the
+# rounds (`contest` and `opponent`, one element per knockout round). Copy this file to make your own
+# rules and give its path as challenge_rules.
+#
+# A design phase before each knockout round, and the limits below apply to EACH phase afresh: every
+# model designs round 1's Zook, then after each knockout round only the models still in design the
+# next round's. With qualifying, round 1's Zook plays a qualifying game against the round's opponent
+# and a win gets the model into the knockout. The challenges are visible by default; hidden, there's
+# no qualifying and each round's contest is announced once its Zooks are in. The knockout's rounds
+# fit the field: round 1 and the final stay, rounds in between are dropped or added at random.
 
 name = "short"
-title = "Beat Spider at Sumo (short test)"
+title = "The short BAMZOOKi challenge"
 music = "synth_funk"                     # the highlights reel's track (Music/tracks.toml; "none" = silent)
+hidden = false                           # the models are told each round's contest and opponent
+qualifying = "first"                     # qualifying games: "first" round only, "all" rounds, "none"
+                                         #   (all: a later round's lost qualifying game forfeits its match)
+max_qualifiers = 8                       # the first 8 to qualify make the knockout (3 rounds); "" = no limit
 description = """
-Design a Zook that beats Spider, the game's best example Zook, at Zook Sumo: push it off the
-raised round table (or survive while it falls off) without leaving the table yourself.
-Read the contest's full rules with get_contest("Zook Sumo") before you design, so you know
-exactly what your Zook has to do.
+Read the rules of each round's contest with get_contest before you design, so you know exactly
+what your Zook has to do (how a game is won, lost or drawn).
 
 Tests are unlimited: test_zook is the Zook Kit's Test button (your Zook walks to a target in the
 plain BoxEnv test environment). Use it as often as you like, after every design and every tweak,
@@ -31,27 +40,27 @@ Twigger, Wormthing) or one of your own earlier designs (e.g. green="MyZook@3", r
 Choosing which contests to play, against whom, is your testing strategy. Saving and previewing
 designs is free too.
 
-When you're done, call submit_design once with your best design. It plays the single
-evaluation game below (it doesn't use a test run): a win scores 1, a draw 0.5, a loss 0. Games
-aren't deterministic: the same two Zooks can get a different result each time. A design that
-only just wins a practice contest may lose the real one, so make sure it wins clearly and
-consistently.
+Each round you reach, you design a new Zook for it, distinctly different from your earlier ones,
+with fresh limits. A qualifying game scores a win 1, a draw 0.5, a loss 0 (it doesn't use a test
+run); you need a win. Games aren't
+deterministic: the same two Zooks can get a different result each time. A design that only just
+wins a practice contest may lose the real one, so make sure it wins clearly and consistently.
 """
 
 [budget]
-runs = 3                                 # test runs (contests, one game each) per model; 0 = unlimited
+runs = 3                                 # test runs (contests, one game each) per round; 0 = unlimited
 counts = ["run_contest"]                 # tools that use a run
-trials = 5                               # run_trial games, besides the runs (0 = unlimited)
+trials = 5                               # run_trial games per round, besides the runs (0 = unlimited)
 test = 0                                 # test_zook games: the Zook Kit's Test button (0 = unlimited)
-submissions = 1                          # how often submit_design may be called
+submissions = 1                          # submit_design calls per round
+reset_each_round = true                  # a design phase per round, the limits afresh each time
 
 [scoring]
 draw = 0.5                               # a game with no winner (e.g. time limit) is worth half a win
-time_limit = 120                         # seconds of play after Go, every contest (tests and evaluation)
+time_limit = 120                         # seconds of play after Go, every contest (tests and qualifying)
 
-# The one official game played by submit_design. side = the submitted Zook's arena colour.
+# The qualifying games. side = the submitted Zook's arena colour. The best qualifiers (score, then
+# fewest test runs) get the byes when the knockout's field isn't a power of two.
 [evaluation]
-contest = "Zook Sumo"
-opponent = "Spider"
-seed = 7                                 # never shown to models
+seed = ""                                # blank = random, decided at the start of every challenge; never shown
 side = "green"

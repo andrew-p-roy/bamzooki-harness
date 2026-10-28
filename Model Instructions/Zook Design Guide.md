@@ -315,8 +315,15 @@ part of the challenge.
   and all the reference tools. `test_zook` (unlimited in the standard challenges) and
   `run_trial` (its own allowance) don't use a run either. Look at the pictures, and test your
   designs, before spending a contest.
-- **Colours:** in contests "green" and "red" are just the two arena sides. The final evaluation
-  game in `get_challenge` says which side your submitted Zook plays, so test on that side.
+- **Colours:** in contests "green" and "red" are just the two arena sides. A qualifying game in
+  `get_challenge` says which side your submitted Zook plays, so test on that side. Knockout
+  matches swap sides from game to game, so a knockout Zook should work on both.
+- **Several rounds:** `get_challenge` says whether you design one round's Zook at a time (a
+  design phase per round with fresh limits; you're called back for the next round's while you're
+  still in the knockout), all of them up front with limits shared by them all, or a team for
+  secret contests. With shared limits, plan how you spend them across all your Zooks. With a secret
+  team, cover different kinds of contest (pushing, racing, obstacles, the ball game): in the
+  knockout you pick one for each round's contest, and each Zook plays only once.
 
 A sensible plan:
 1. Design your own Zook, `save_zook` and check the pictures (free). Is it standing on its legs,
@@ -329,12 +336,12 @@ A sensible plan:
    (body plan, leg count and placement, one- or two-part legs, stride paths, gait settings),
    including bold ones, and compare their trial numbers. Then tweak the best one setting at a
    time, testing each change and keeping it only if it helps.
-4. `run_contest` (uses a run) against the opponent you must beat, on your evaluation side. If you
-   lose, read the stats and stills (did you fall off, get pushed, walk the wrong way?), change
-   one thing with `edit_zook`, and play the next game: against the target again, or new version
-   against old.
+4. `run_contest` (uses a run) in the contest you're designing for, against the opponent you must
+   beat, on your side. If you lose, read the stats and stills (did you fall off, get pushed, walk
+   the wrong way?), change one thing with `edit_zook`, and play the next game: against the target
+   again, or new version against old.
 5. Keep a few runs in reserve to confirm your best version wins again, not just once. Then
-   `submit_design` it: that plays the single official evaluation game.
+   `submit_design` it as `get_challenge` says (for its round, or into your team).
 
 ## 10. Limits
 

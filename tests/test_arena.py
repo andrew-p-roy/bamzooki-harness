@@ -5,6 +5,12 @@ import json
 import queue
 
 from bamzooki.arena import Arena, Entrant, Keyboard
+from bamzooki.challenge import Challenge, Session
+
+
+def plan(rules="short", **kw):
+    """The default session: one round of Zook Sumo against Spider."""
+    return Session.plan(Challenge.load(rules), **kw)
 
 
 def keyboard(*lines):
@@ -35,6 +41,8 @@ def arena(router, kb, verbose=False):
     a = Arena.__new__(Arena)
     a.router, a.keyboard, a.verbose, a.max_turns, a.tools, a.skip = router, kb, verbose, 10, [], False
     a.ending, a.knockout_places, a.announcer, a.show = False, {}, None, False
+    a.plan = plan()
+    a.challenge = a.plan.rules
     a.entrant = Entrant("lab/model", messages=[{"role": "user", "content": "go"}], submitted=True)
 
     async def run_tool(call):
@@ -355,18 +363,16 @@ def test_previous_entries_are_archived(tmp_path):
 def test_presentation_saved_once_with_a_header(tmp_path):
     from types import SimpleNamespace
 
-    from bamzooki.challenge import Challenge
-
     a = arena(Talker(), keyboard())
-    a.cfg, a.challenge = SimpleNamespace(zoo_dir=tmp_path), Challenge.load()
-    a.entrant = e = Entrant("lab/alpha", messages=[{"role": "user", "content": "present"}], submitted=True,
-                            qualified=True, tokens=1234, cost=0.0123)
-    e.submission = {"design": "lab_alpha/Crusher@3", "outcome": "win", "score": 1.0, "status": "finished",
-                    "game": {"contest": "Zook Sumo", "opponent": "Spider"}, "video": "C:/v/Challenge game.mp4"}
+    a.cfg = SimpleNamespace(zoo_dir=tmp_path)
+    a.entrant = e = Entrant("lab/alpha", messages=[{"role": "user", "content": "present"}], tokens=1234, cost=0.0123)
+    a._took(e, {"design": "lab_alpha/Crusher@3", "round": 1, "outcome": "win", "score": 1.0, "status": "finished",
+                "game": {"contest": "Zook Sumo", "opponent": "Spider"}, "video": "C:/v/Qualifying.mp4"})
+    assert e.submitted and e.qualified
     asyncio.run(a.converse())  # the model's answer: "lab/alpha line one\nline two"
     path = tmp_path / "lab_alpha" / f"Presentation - {a.challenge.name}.txt"
     text = path.read_text(encoding="utf-8")
-    assert "Submitted Zook:  lab_alpha/Crusher@3" in text and "WIN, score 1.0" in text and "qualified" in text
+    assert "Put forward:     round 1 (Zook Sumo): Crusher@3, WIN" in text and "Knockout:        qualified" in text
     assert "1,234 / $0.0123" in text and ".mp4" not in text  # no video links
     assert text.endswith("lab/alpha line one\nline two\n") and e.presented
     path.write_text("kept")
@@ -388,23 +394,21 @@ def test_knockout_videos_copied_for_each_competitor(tmp_path):
 def test_end_summary_table(tmp_path, capsys):
     from types import SimpleNamespace
 
-    from bamzooki.challenge import Challenge
-
     a = arena(Talker(), keyboard())
-    a.cfg, a.arena_dir, a.challenge = SimpleNamespace(zoo_dir=tmp_path / "zoo"), tmp_path, Challenge.load()
-    a.entrants = {
-        "lab/alpha": Entrant("lab/alpha", design="lab_alpha/Crusher@3", qualified=True, tokens=120_000, cost=0.5,
-                             submission={"outcome": "win", "score": 1.0, "status": "finished"}),
-        "lab/beta": Entrant("lab/beta", design="lab_beta/Stomper@1", tokens=8_000, cost=0.0123,
-                            submission={"outcome": "draw", "score": 0.5, "status": "timeout"}),
-        "lab/gamma": Entrant("lab/gamma", tokens=500, cost=0.0001),
-    }
+    a.cfg, a.arena_dir = SimpleNamespace(zoo_dir=tmp_path / "zoo"), tmp_path
+    a.entrants = {m: Entrant(m, tokens=t, cost=c) for m, t, c in
+                  (("lab/alpha", 120_000, 0.5), ("lab/beta", 8_000, 0.0123), ("lab/gamma", 500, 0.0001))}
+    game = {"contest": "Zook Sumo", "opponent": "Spider"}
+    a._took(a.entrants["lab/alpha"], {"design": "lab_alpha/Crusher@3", "round": 1, "game": game, "outcome": "win",
+                                      "score": 1.0, "status": "finished"})
+    a._took(a.entrants["lab/beta"], {"design": "lab_beta/Stomper@1", "round": 1, "game": game, "outcome": "draw",
+                                     "score": 0.5, "status": "timeout"})
     a.knockout_places = {"lab/alpha": 1}
     path = a.summary()
     text = path.read_text(encoding="utf-8")
     assert path.parent == tmp_path / "Sessions"
-    for want in ("Crusher@3", "WIN", "DRAW (time limit)", "not submitted", "1st", "120,000", "$0.5000",
-                 "1 qualified", "128,500", "$0.5124", "0 of 20"):
+    for want in ("round 1 (Zook Sumo): Crusher@3, WIN", "DRAW at the time limit", "not submitted", "1st", "120,000",
+                 "$0.5000", "1 qualified", "128,500", "$0.5124"):
         assert want in text, want
     widths = {len(line) for line in text.splitlines()[2:] if line}
     assert len(widths) == 1  # every row of the table lines up
@@ -512,10 +516,11 @@ def test_sign_off_tells_the_story(tmp_path):
     a, r, seats = contest_arena()
     a.show_log = tmp_path / "show.md"
     a.announcer = Announcer(Talker(), "host/model")
-    a.entrants["lab/alpha"].submission, a.entrants["lab/alpha"].design = {"outcome": "win"}, "lab_alpha/Crusher@1"
+    a._took(a.entrants["lab/alpha"], {"design": "lab_alpha/Crusher@1", "round": 1, "outcome": "win",
+                                      "game": {"contest": "Zook Sumo"}})
     a.knockout_places = {"lab/alpha": 1, "lab/beta": 2}
     story = a.story()
-    assert "lab/alpha: WIN in its challenge game with Crusher, 1st in the knockout." in story
+    assert "lab/alpha: round 1 (Zook Sumo): Crusher@1, WIN, 1st in the knockout." in story
     assert "lab/beta: didn't submit, 2nd in the knockout." in story and "Champion: lab/alpha." in story
     asyncio.run(a.sign_off())
     assert "Champion: lab/alpha" in a.announcer.router.seen[0][2]
@@ -618,15 +623,14 @@ def test_trash_talk_with_showtime_shows_the_opponent(tmp_path):
 
 def test_announcer_only_with_showtime(tmp_path, monkeypatch):
     import bamzooki.arena as A
-    from bamzooki.challenge import Challenge
 
     monkeypatch.setattr(A, "load_api_key", lambda: "test-key")
     monkeypatch.setenv("BAMZOOKI_ARENA_DIR", str(tmp_path))
-    plain = A.Arena(Challenge.load(), [], announcer="lab/host", speak=True)
+    plain = A.Arena(plan(), [], announcer="lab/host", speak=True)
     assert plain.show is False and plain.announcer is None and plain.voice is None
-    show = A.Arena(Challenge.load(), [], show=True, announcer="lab/host")
+    show = A.Arena(plan(), [], show=True, announcer="lab/host")
     assert show.announcer.model == "lab/host"
-    assert A.Arena(Challenge.load(), [], show=True, announcer=None).announcer is None  # --no-announcer
+    assert A.Arena(plan(), [], show=True, announcer=None).announcer is None  # --no-announcer
 
 
 def test_victory_speech_only_with_showtime():
@@ -651,13 +655,16 @@ def test_challenger_header_names_the_game_and_map(monkeypatch):
     from bamzooki import arena, install
 
     a = arena.Arena.__new__(arena.Arena)
-    a.challenge = SimpleNamespace(evaluation=SimpleNamespace(contest="Zook Sumo"))
 
     def no_install():
         raise FileNotFoundError("no install")
 
     monkeypatch.setattr(install.Install, "discover", staticmethod(no_install))
-    assert a._game_and_map() == "  |  game: Zook Sumo"
+    assert a._game_and_map("Zook Sumo") == "  |  game: Zook Sumo"
+    a.plan = plan(contests=["Zook Sumo", "Zook Smash"], opponents=["Spider", "Ant"])
+    assert a._rounds_line() == "  |  1. Zook Sumo v Spider  2. Zook Smash v Ant"
+    a.plan = plan("full")
+    assert a._rounds_line() == "  |  1 round(s), contests secret"
     assert arena._spaced("TableSumo") == "Table Sumo"
 
 
@@ -717,3 +724,130 @@ def test_auto_answers_the_shows_questions_itself():
     asyncio.run(a.match_talk([], "between games", "to go on"))  # returns without waiting for Enter
     a.auto = False
     assert asyncio.run(a.confirm("Add it to the Hall of Fame? [y/N] ")) is False  # no keyboard: no
+
+
+class Picker(Talker):
+    """Names a Zook when asked to pick one."""
+
+    def __init__(self, reply):
+        super().__init__()
+        self.reply = reply
+
+    async def chat(self, model, messages, tools, on_delta=None, single_tool=False, tool_choice="auto"):
+        self.seen.append((model, tool_choice, messages[-1]["content"]))
+        return {"choices": [{"message": {"content": self.reply}}], "usage": {}}
+
+
+def test_zook_named_in_a_reply():
+    from bamzooki.arena import _match_zook
+
+    options = ["m/Crusher@1", "m/Crusher@2", "m/Stomp@1"]
+    assert _match_zook("I'll go with Crusher@2.", options) == "m/Crusher@2"
+    assert _match_zook("stomp, obviously", options) == "m/Stomp@1"
+    assert _match_zook("the red one", options) is None
+
+
+def test_visible_rounds_play_the_zook_put_forward():
+    from types import SimpleNamespace
+
+    a, r, seats = contest_arena()
+    a.plan = plan(contests=["Zook Sumo", "Zook Smash"], opponents=["Spider", "Ant"])
+    e = a.entrants["lab/alpha"]
+    for n in (1, 2):
+        a._took(e, {"design": f"lab_alpha/R{n}@1", "round": n, "game": {"contest": "x"}, "outcome": "win"})
+    now = {"info": SimpleNamespace(name="Zook Smash", contest_file="CP_ZOOK_SMASH"), "slot": 2, "event": "e"}
+    options = a._knockout_options(e, 2, set(), False)
+    assert options == ["lab_alpha/R2@1"]
+    assert asyncio.run(a.choose_zook(seats[0], seats[1], now, "Final", options)) == "lab_alpha/R2@1"
+    assert r.seen == []  # no model call: it designed this one for the round
+
+
+def test_a_round_without_a_zook_is_forfeited():
+    a, _, _ = contest_arena()
+    a.plan = plan(contests=["Zook Sumo", "Zook Smash"], opponents=["Spider", "Ant"])
+    e = a.entrants["lab/alpha"]
+    a._took(e, {"design": "lab_alpha/R1@1", "round": 1, "game": {"contest": "x"}, "outcome": "win"})
+    assert a._knockout_options(e, 2, set(), False) == []  # nothing put forward for round 2: forfeit
+    assert a._knockout_options(e, None, set(), False) == ["lab_alpha/R1@1"]  # an extra early round: any Zook
+    assert a._knockout_options(e, 2, set(), True) == ["lab_alpha/R1@1"]  # an exhibition: any Zook
+
+
+def test_short_rules_qualify_in_round_1_and_a_later_lost_qualifier_forfeits(tmp_path):
+    a, _, _ = contest_arena()
+    rules = tmp_path / "all.toml"
+    rules.write_text(Challenge.load("short").path.read_text(encoding="utf-8").replace('qualifying = "first"',
+                                                                                     'qualifying = "all"'))
+    a.plan = Session.plan(Challenge.load(rules), ["Zook Sumo", "Zook Smash"], ["Spider", "Ant"])
+    e = a.entrants["lab/alpha"]
+    e.qualified = False
+    a._took(e, {"design": "lab_alpha/R2@1", "round": 2, "outcome": "win"})
+    assert not e.qualified  # only round 1 gets a model in
+    a._took(e, {"design": "lab_alpha/R1@1", "round": 1, "outcome": "win"})
+    assert e.qualified
+    beta = a.entrants["lab/beta"]
+    a._took(beta, {"design": "lab_beta/S2@1", "round": 2, "outcome": "loss"})
+    assert a._knockout_options(beta, 2, set(), False) == [] and "qualifying" in a._forfeit_reason(beta, 2)
+    assert a._knockout_options(e, 2, set(), False) == ["lab_alpha/R2@1"]
+
+
+def test_the_knockout_field_is_capped_and_seeded(tmp_path):
+    from types import SimpleNamespace
+
+    a, _, _ = contest_arena()
+    a.cfg = SimpleNamespace(zoo_dir=tmp_path)
+    a.plan = plan()
+    assert a.cap == 8 and not a._field_full()
+    for i in range(8):
+        a.entrants[f"lab/m{i}"] = Entrant(f"lab/m{i}", qualified=True)
+    assert a._field_full()
+    weak, strong = Entrant("lab/weak", entries=[{"round": 1, "score": 0.5}]), Entrant("lab/strong", entries=[{"round": 1, "score": 1.0}])
+    assert a._seeding([weak, strong]) == [strong, weak]  # the best qualifiers first (they get the byes)
+
+
+def test_the_queue_is_checked_against_the_rounds():
+    a, _, _ = contest_arena()
+    a.plan = plan(contests=["Zook Sumo", "Zook Smash", "Zookball Red To Score"], opponents=["Spider", "Ant", "Ant"])
+    a.queue = [f"lab/m{i}" for i in range(8)]
+    assert a.rounds_check() == (False, [])  # 8 models, 3 rounds
+    a.queue = a.queue[:6]
+    mismatch, lines = a.rounds_check()
+    assert not mismatch and "2 model(s) will get a bye" in lines[0]
+    a.queue = a.queue[:4]
+    mismatch, lines = a.rounds_check()
+    assert mismatch and "1 round(s) will be skipped: round 2 (Zook Smash)" in lines[1]  # short: round 1 and the final stay
+    a.queue = [f"lab/m{i}" for i in range(12)]
+    mismatch, lines = a.rounds_check()
+    assert not mismatch  # capped at max_qualifiers = 8
+    a.plan = plan("full", contests=["Zook Sumo", "Zook Smash"], opponents=["", ""])
+    mismatch, lines = a.rounds_check()
+    assert mismatch and "1 extra random round(s) will be added before round 1" in lines[1]
+    a.queue = []
+    assert a.rounds_check() == (False, [])  # called by hand
+
+
+def test_hidden_team_picks_each_zook_once():
+    from types import SimpleNamespace
+
+    a, _, seats = contest_arena()
+    a.plan = plan("full", contests=["", ""], opponents=["", ""])
+    a.router = Picker("Stomp, it pushes hardest")
+    e = a.entrants["lab/alpha"]
+    for z in ("Crusher", "Stomp", "Hopper"):
+        a._took(e, {"design": f"lab_alpha/{z}@1", "round": None})
+    now = {"info": SimpleNamespace(name="Zook Sumo", contest_file="CP_ZOOK_SUMO"), "slot": 1, "event": "Zook Sumo knockout"}
+    used = set()
+
+    def choose(round_name):
+        return asyncio.run(a.choose_zook(seats[0], seats[1], now, round_name,
+                                         a._knockout_options(e, 1, used, False), used))
+
+    assert choose("Semi-finals") == "lab_alpha/Stomp@1"
+    asked = a.router.seen[0][2]
+    assert "Zook Sumo" in asked and "Crusher@1, Stomp@1, Hopper@1" in asked and "only once" in asked
+    # Stomp is used up: the same answer now falls back to the first Zook still free
+    assert choose("Final") == "lab_alpha/Crusher@1"
+    assert "already played: Stomp@1" in a.router.seen[1][2] and "Stomp@1," not in a.router.seen[1][2].split("play:")[1]
+    choose("Final")  # the last one: no question to ask
+    assert used == {"lab_alpha/Crusher@1", "lab_alpha/Stomp@1", "lab_alpha/Hopper@1"} and len(a.router.seen) == 2
+    assert a._knockout_options(e, 1, used, False) == []  # the team is used up: it forfeits
+    assert len(a._knockout_options(e, None, used, False)) == 3  # an extra early round: any of them

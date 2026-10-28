@@ -277,11 +277,14 @@ def test_arena_sees_a_submission():
     import json
 
     from bamzooki.arena import Arena, Entrant
+    from bamzooki.challenge import Challenge, Session
 
     a = Arena.__new__(Arena)
+    a.plan = Session.plan(Challenge.load("short"))
     a.entrant = Entrant("some/model", False)
-    a._summarise("submit_design", json.dumps({"design": "x/Bot@1", "outcome": "draw", "score": 0.5}))
-    assert a.entrant.submitted
+    a._summarise("submit_design", json.dumps({"design": "x/Bot@1", "round": 1, "outcome": "draw", "score": 0.5,
+                                              "game": {"contest": "Zook Sumo"}}))
+    assert a.entrant.submitted and not a.entrant.qualified and a.entrant.to_call
 
 
 def test_countdown_cues_in_the_driver_log():

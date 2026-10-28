@@ -43,7 +43,7 @@ calling, from [openrouter.ai/models](https://openrouter.ai/models)):
 | `/challenger <id>` | Calls any model now, e.g. `/challenger google/gemini-2.5-pro` |
 | anything else | Talks to the current model, e.g. "why four legs?" |
 | `/leaderboard` | Everyone's result so far |
-| `/contest` | Knockout tournament between the Zooks that **won** their challenge game this session. The champion then gives a speech and takes your questions |
+| `/contest` | Knockout tournament between this session's qualified models, one contest per round (see the rules). The champion then gives a speech and takes your questions |
 | `/pick <name>` | Before a knockout match: predict the winner (you're scored at the end) |
 | `/exhibition <a> <b>` | One match between any two Zooks submitted this session, qualified or not (with the show if `--showtime`) |
 | `/halloffame` | The champions you chose to add after a knockout, across sessions |
@@ -122,7 +122,7 @@ cp bamzooki.example.toml bamzooki.toml    # then edit paths (optional on a defau
 | `wine_command` | `BAMZOOKI_WINE`      | launcher prefix on non-Windows, e.g. `["wine"]`                 |
 | `cache_dir`    | `BAMZOOKI_CACHE_DIR` | extraction cache and install sandbox (default `.cache/bamzooki`) |
 | `arena_dir`    | `BAMZOOKI_ARENA_DIR` | where models' work goes, **outside the repo** (default `~/BAMZOOKi Arena`) |
-| `challenge`    | `BAMZOOKI_CHALLENGE` | challenge file (default `challenges/default.toml`)              |
+| `challenge`    | `BAMZOOKI_CHALLENGE` | rules file, if `[arena] challenge_rules` isn't set (default `short`) |
 
 Set `BAMZOOKI_CONFIG` to use a config file somewhere else. If `install_dir` isn't set, the
 standard Program Files locations (or the default Wine prefix) are searched.
@@ -202,22 +202,60 @@ stills for vision models) and are logged to `<arena_dir>/Zook Entries/<model>/re
 (save/preview: a few seconds; trial: 10–30 s; contest: up to about two and a half minutes). If your
 client times out long tool calls, raise its limit (Claude Code: `MCP_TOOL_TIMEOUT`, in ms).
 
-**Challenges.** The server gives the model a task from a challenge file
-(`challenges/default.toml`; choose another with `challenge = "..."` in `bamzooki.toml`,
-`BAMZOOKI_CHALLENGE` or `--challenge`, or run `--no-challenge` for free play). A challenge sets
-the task text, the **test-run budget** (default 20; failed engine runs are free) and the **one
-evaluation game** that `submit_design` plays (contest, opponent, seed, side; outside the budget;
-win 1, draw 0.5, loss 0). **Models never see or choose seeds**: the evaluation seed is never
-shown, and every practice contest gets a fresh random seed (kept in the operator's `results.jsonl`
-only). Games are deterministic for a seed, so a model that controlled or knew seeds could rehearse
-the evaluation game; to the models, games are simply non-deterministic.
-`challenges/short.toml` is the same task with 3 runs. Every contest in a challenge stops after
-`time_limit` seconds of play after Go, in real time (default 120, in `[scoring]`); no winner by then is a draw and the game is stopped. **Every game is one the model chooses** through the tool
-arguments: a test or trial for one of its Zooks, or one contest with the two Zooks it picks.
+**Challenges: the rules.** Three settings in `bamzooki.toml` `[arena]` decide the challenge
+(`--challenge` overrides the rules; `--no-challenge` on the MCP server is free play):
+
+- `challenge_rules = "short"` or `"full"` (`challenges/<name>.toml`, or a path to your own) sets the
+  limits, the scoring, qualifying, the knockout's size and whether the challenges are hidden.
+- `contest` and `opponent` are arrays with **one element per knockout round**, the final last;
+  `""` = random (no contest or opponent picked twice while there are others). The arena plans them
+  once (`Zook Entries/session.json`) so every model faces the same rounds.
+- `hidden` overrides the rules file's: **short is visible, full is hidden** by default.
+
+| | Visible | Hidden |
+|---|---|---|
+| **short** | **A design phase before each knockout round**, with **fresh limits** each time: every model designs round 1's Zook, then after each knockout round **only the models still in** design the next round's. `qualifying` (in the rules file): `"first"` (default) = round 1's Zook plays a **qualifying game** against the round's opponent and a **win** gets the model in; `"all"` = every round's does, and losing a later one **forfeits** that round's match; `"none"`. | The same design phases, but **blind**: no qualifying, and each round's contest is **announced once its Zooks are in**. |
+| **full** | One set of limits **shared by all the Zooks**, all designed up front: a separate Zook for each challenge, one put forward per challenge (`submit_design(ref, round)`). **No qualifying**: everyone who puts Zooks forward is in. | The model doesn't know the contests: it designs a **team of one Zook per round** (any contest and opponent may be tested). |
+
+**The field.** `max_qualifiers` (in the rules file, default **8**, enough for 3 rounds; `""` = no
+limit) caps the knockout: once that many models have qualified (or, without qualifying, put their
+Zooks forward) the rest of the queue isn't called and round 1 can start. At the start the arena
+**checks the queue against the rounds** (a knockout of n models has ⌈log₂ n⌉ rounds) and, if they
+don't match, says which rounds will be skipped or how many random ones added, and asks before
+carrying on. A field that isn't a power of two gets **byes in the first round only**, just enough
+to leave one (6 models: 2 byes and 2 matches, then 4), for the **best qualifiers** (round 1 score,
+then fewest test runs; random without qualifying).
+
+In the **knockout** (`/contest`) each round plays its element. Full rules: with fewer entrants the
+first elements are skipped, so the final always plays the last; with more, the extra early rounds
+are random. Short rules: **round 1 and the final always stay**, and rounds in between are dropped
+(the earliest first) or random ones added after round 1. A model plays the Zook it put forward for
+that round's challenge. Hidden full rules: each round's contest is **announced as the round
+starts** (drawn then if `""`, the same for every match in it) and each model in a match **picks one
+of its team Zooks**, each only once. A model with **no Zook for the round** (none put forward, no
+team Zook left, or a lost qualifying game under `"all"`) **forfeits** the match: the other goes
+through without a game (a coin toss if neither can play). With several rounds the Simulator's Zook
+selection screen shows the round, its contest and both Zooks before every match.
+Every model's system prompt ends with **this session's rules** written out for the selected mode
+(the rules, visible or hidden, how many Zooks it **must** put forward and how, the forfeit, the
+limits, qualifying, the field, the knockout; `Session.briefing`), and `get_challenge` returns them
+as `rules_of_this_session`.
+
+**Models never see or choose seeds.** Practice contests get a fresh random seed each, and the
+qualifying games' `seed` in `[evaluation]` is blank (random, decided as the session starts); seeds
+are kept only in the operator's `results.jsonl`. Games are deterministic for a seed, so a model
+that controlled or knew seeds could rehearse the real game; to the models, games are simply
+non-deterministic. Every contest stops after `time_limit` seconds of play after Go, in real time
+(default 120, in `[scoring]`); no winner by then is a draw and the game is stopped. **Every game
+is one the model chooses** through the tool arguments: a test or trial for one of its Zooks, or one
+contest with the two Zooks it picks.
 **Copying an example is refused**: `save_zook`, `edit_zook`, `validate_zook` and `submit_design`
 reject a design containing most of an example's parts nearly unchanged (`sdk.zook.likeness`:
 angles within 18°, sizes within ×0.6–×1.65, at the same place in the tree, 70% of the example's
-parts), with a message that names neither the example nor any setting.
+parts), with a message that names neither the example nor any setting. A model's own Zooks must
+also be **distinct**: `submit_design` refuses one that shares half its parts, either way, with a
+Zook it has already put forward (stricter than the 70% for examples), so a small change doesn't
+make another Zook.
 Trials don't use test runs; they have their own allowance (`trials` in `[budget]`; only
 `run_contest` is in `counts`), so models are encouraged to compare different designs on them.
 `test_zook` is the Zook Kit's Test button (the Zook walks to the Builder's target in BoxEnv, for
@@ -340,15 +378,20 @@ typed while it works halts it and calls the next challenger straight away, which
 of a model that is stuck or not playing. Other commands wait until the model is done. If a model
 breaks down (an error in its run), the arena reports it and stays at the prompt.
 
-**Qualifying and `/contest`.** A model qualifies by **winning** its challenge game, which is played like
-a knockout game: the "3, 2, 1, Go!" countdown and beeps, then the match music (live with `--showtime`,
-in its video either way). When the
-last challenger in the queue has finished and at least two models have qualified, the arena asks
-whether to run the contest now (`Y`/`N`). `N` leaves `/contest` for later. A draw (no
-winner by the time limit) scores 0.5 but doesn't qualify. `/contest` can be called at any point
-in the session, whether or not the queue is finished. It plays a knockout between the
-submitted Zooks of every model that has qualified so far, using the challenge's contest and time
-limit. Each match is announced as `model (Zook) v model (Zook)`. A drawn game is replayed with
+**Qualifying and `/contest`.** Under short rules with visible challenges a model qualifies by
+**winning** round 1's qualifying game, played like a knockout game: the "3, 2, 1, Go!"
+countdown and beeps, then the match music (live with `--showtime`, in its video either way). A draw
+(no winner by the time limit) scores 0.5 but doesn't qualify. With `qualifying = "none"`, under
+full rules, or with hidden challenges, there's no qualifying: every model that puts Zooks forward
+is in. When the last challenger in the queue has finished, or `max_qualifiers` models have
+qualified, and at least two have, the arena asks whether to run the contest now (`Y`/`N`). `N`
+leaves `/contest` for later. `/contest` can be called at any point in the session, whether or not
+the queue is finished. It plays a knockout between the models that have qualified so far (the best
+`max_qualifiers` of them). Under short rules, before each round after the first, the arena calls
+each model still in back to its own conversation to design that round's Zook (its MCP server opens
+the round with fresh limits); the round's matches start once every one has put a Zook forward or
+stopped. Each round announces its contest (see the rules above), and
+each match is announced as `model (Zook) v model (Zook)` with the Zooks played in it. A drawn game is replayed with
 sides swapped and a new seed, up to three games, and is then settled by a coin toss. A game the
 engine fails to finish is played once more, then counts as a draw. With `--showtime`, before each
 match both models say one line to the audience (a comment, trash talk or a boast about their
@@ -511,7 +554,7 @@ src/bamzooki/
   music.py      match music (live and in the reel): tracks, loop points, the track for a challenge
 Music/          match music (Lyria 3 clips) and tracks.toml (loop points, tags, default)
 Model Instructions/  agent prompt, design guide, your manual copy (what models are told)
-challenges/     challenge files (task, budget, evaluation game)
+challenges/     rules files: short.toml, full.toml (limits, scoring, hidden, qualifying, max_qualifiers)
 tools/          arena.py, run_contest.py, replay.py, challenge.py, extract.py, check_assets.py, spikes
 tests/          synthetic codec tests plus install-backed tests (skipped without an install)
 ```

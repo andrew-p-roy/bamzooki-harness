@@ -11,6 +11,7 @@ and takes from a few seconds (save, preview) to about a minute (a contest).
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 from pathlib import Path
@@ -21,9 +22,9 @@ from ..studio import DEFAULT_VIEWS, Studio
 
 INSTRUCTIONS = """\
 You design creatures ("Zooks") for BAMZOOKi and test them in the real 2006 game engine, which
-runs on the user's screen. Start with get_challenge: it states your task, how many test runs
-you have and the one game your final design will be judged on (submit_design). Then read that
-contest's rules with get_contest, so you know what you're designing for. If get_challenge says
+runs on the user's screen. Start with get_challenge: it states your task (the rounds and their
+contests, or that they're secret), your limits and what to submit with submit_design. Then read
+the contests' rules with get_contest, so you know what you're designing for. If get_challenge says
 you aren't registered, call register_entrant with your full model name first.
 
 You choose every game: test_zook (the Zook Kit's Test button: one Zook walks to a target in the
@@ -35,7 +36,7 @@ experiment with clearly different designs, and refine on the evidence.
 Opponents can be any example Zook or your own earlier designs, including two of your versions
 against each other. Every counted result tells you how many runs are left. Saving and previewing
 are free. Typical loop:
-  1. get_design_guide (once) and get_contest for the rules of the contest you'll be judged on.
+  1. get_design_guide (once) and get_contest for the rules of the contests you'll be judged on.
   2. get_zook an example ("Ant", "Spider", ...) to see a working design. Learn from it, but
      don't copy it: save_zook refuses designs too close to an example. Design your own.
   3. save_zook your design (JSON spec). The game's own Zook Kit code lays it out, clamps
@@ -44,7 +45,8 @@ are free. Typical loop:
      free play...) to measure it. Spend runs on the contests that tell you most: against the
      opponent you must beat, or your new version against your previous one. Read the verdict and
      stats, look at the stills, improve with edit_zook.
-  5. submit_design your best design when you're done (or when your runs are used up).
+  5. submit_design your Zooks as get_challenge says: the open round's (rounds designed one at a
+     time), one per round, or a team when the contests are secret.
 Refs: "Spider" (example), "MyZook" (your latest version), "MyZook@2" (a version).
 Games aren't deterministic: the same two Zooks can get a different result each time. A design that
 only just wins a practice contest may lose the real one, so aim to win clearly and consistently.
@@ -64,8 +66,23 @@ def _with_images(summary: dict, previews: dict) -> list:
     return out
 
 
+def _readable(fn):
+    """A model's mistake (a Zook that doesn't exist, a bad name or contest) comes back as an error it
+    can read and act on, not the server's bare "Error executing tool"."""
+    @functools.wraps(fn)
+    def tool(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except (KeyError, ValueError) as err:
+            text = _dump({"error": str(err.args[0] if err.args else err)})
+            return [text] if fn.__annotations__.get("return") in (list, "list") else text
+    return tool
+
+
 def build_server(studio: Studio) -> MCPServer:
     server = MCPServer(name="bamzooki", title="BAMZOOKi Zook lab", instructions=INSTRUCTIONS)
+    _tool = server.tool
+    server.tool = lambda **kw: (lambda fn: _tool(**kw)(_readable(fn)))  # every tool below answers mistakes
     counted = studio.challenge.counts if studio.challenge else ()
     trials = studio.challenge.trials if studio.challenge else 0
     tests = studio.challenge.tests if studio.challenge else 0
@@ -92,11 +109,29 @@ def build_server(studio: Studio) -> MCPServer:
     def get_challenge() -> str:
         return _dump(studio.challenge_info())
 
-    @server.tool(description="Submit your final design for the challenge. It plays the challenge's ONE official "
-                             "evaluation game (shown by get_challenge; it doesn't use a test run) and returns "
-                             "the outcome and score. Limited submissions (usually one): submit your best design.")
-    def submit_design(ref: str) -> list:
-        r = studio.submit(ref)
+    s = studio.session
+    if s is None or s.round_by_round:
+        k = (s.current or 0) + 1 if s is not None else 1
+        submit_how = ("Submit your design for the round that is open (get_challenge shows it). "
+                      + ("It plays that round's qualifying game against the round's opponent (it doesn't use a test "
+                         "run) and returns the outcome. " if s is None or s.qualifying_in(k) else "")
+                      + ("One submission per round: submit your best design. You MUST submit a Zook for this round, "
+                         "distinctly different from your earlier ones: in the knockout you forfeit a round you have no "
+                         "Zook for." if s is not None and s.current is not None else
+                         "Then you move on to the next round. One submission per round: submit your best design."))
+    elif s.team:
+        submit_how = (f"Put a Zook forward for your team: you MUST put forward {len(s.rounds)} distinctly different "
+                      "Zooks, one call each. No game is played. In the knockout you'll pick one of them for each "
+                      "round's contest, each only once; with none left you forfeit the match.")
+    else:
+        submit_how = (f"Put a Zook forward for one challenge: `round` 1-{len(s.rounds)} (get_challenge lists them). "
+                      "No game is played. One Zook per challenge, once each: put forward your best. You MUST put "
+                      "forward a distinctly different Zook for every challenge: in the knockout you forfeit any "
+                      "round you have no Zook for.")
+
+    @server.tool(description=submit_how)
+    def submit_design(ref: str, round: int | None = None) -> list:
+        r = studio.submit(ref, round)
         return _with_images(r, {"stills (Go | halfway / finish | end)": r.get("stills")})
 
     @server.tool(description="How Zooks are built: the part schema with every slider's range and "
@@ -197,8 +232,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--model", default=os.environ.get("BAMZOOKI_MODEL"),
                     help="the entrant's full model name (folder for its designs and videos); "
                          "omit it to let the model register itself with register_entrant")
-    ap.add_argument("--challenge", help="challenge TOML (default: bamzooki.toml 'challenge' or "
-                                        "challenges/default.toml)")
+    ap.add_argument("--challenge", help="the rules: short, full or a TOML path (default: bamzooki.toml [arena] "
+                                        "challenge_rules); the rounds come from [arena] contest and opponent")
+    ap.add_argument("--session", help="the arena's planned session (Zook Entries/session.json): the same rounds "
+                                      "for every model; overrides --challenge")
     ap.add_argument("--no-challenge", action="store_true", help="free mode: no task, unlimited runs")
     ap.add_argument("--http", action="store_true", help="serve MCP over HTTP (streamable-http) instead of stdio")
     ap.add_argument("--host", default="127.0.0.1", help="HTTP bind address (keep it local)")
@@ -216,11 +253,15 @@ def main(argv: list[str] | None = None) -> None:
                     help="the challenge game's countdown beeps and music also play live (its video has them anyway)")
     a = ap.parse_args(argv)
     view_fit = (float(a.view_fit.split(",")[0]), int(a.view_fit.split(",")[1])) if a.view_fit else None
-    from ..challenge import Challenge
+    from ..challenge import Session, plan_from_config
     from ..config import load_config
 
-    challenge = None if a.no_challenge else Challenge.load(a.challenge or load_config().challenge)
-    server = build_server(Studio(model=a.model, challenge=challenge, position=a.position, view_fit=view_fit,
+    session = None
+    if a.session:
+        session = Session.load(Path(a.session))
+    elif not a.no_challenge:
+        session = plan_from_config(load_config(), a.challenge)
+    server = build_server(Studio(model=a.model, session=session, position=a.position, view_fit=view_fit,
                                  fullscreen=a.full_screen, live_sound=a.live_sound))
     if a.http:
         server.run("streamable-http", host=a.host, port=a.port)

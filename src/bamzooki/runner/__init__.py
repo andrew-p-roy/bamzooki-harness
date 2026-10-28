@@ -476,6 +476,33 @@ class Engine:
                                     "none" if fullscreen else position, cancel=cancel)
         return status
 
+    def selection(self, contest: str, zooks: list[tuple[Path, str]], cancel: threading.Event, title: str = "",
+                  caption: str = "", window: tuple[int, int] | None = None, position: str = "none",
+                  fullscreen: bool = False, max_time: float = 900.0) -> str:
+        """The Simulator's Zook selection screen for the next game: `contest` picked in its list (with
+        its picture), the two Zooks ((path, label), green first) turning in their panels, `title`
+        above and `caption` below, until `cancel` is set (or max_time real seconds). Windowing as in
+        Job. Returns how it ended ("stopped", "exited", ...)."""
+        self.prepare()
+        self.write_video_cfg(window, fullscreen)
+        client = FULL_SCREEN_MODE if fullscreen else window or DEFAULT_CLIENT
+        run_dir = self.runs / f"{time.strftime('%Y%m%d-%H%M%S')}-selection"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        spec = {
+            "driver": "HarnessSelection", "classes": {1: "HarnessSelection", 2: "HarnessCurtain"}, "camera": 3,
+            "curtain": 1, "fullscreen": 1 if fullscreen else 0, "window_w": client[0], "window_h": client[1],
+            "title": title or contest, "contest": contest, "caption": caption or None,
+            "zooks": {i + 1: {"path": _posix(p), "label": label} for i, (p, label) in enumerate(zooks)},
+            "max_time": max_time, "window_title": f"BAMZOOKi harness - {contest}",
+            "log": _posix(run_dir / "selection_log.txt"), "boot_log": _posix(run_dir / "boot_log.txt"),
+        }
+        (run_dir / "job.dat").write_text(table.dumps(spec), encoding="latin-1")
+        args = ["-init", BOOT_NAME, "-videocfg", VIDEO_CFG,
+                "-script", _posix(LUA_DIR / "boot.lua"), "-job", _posix(run_dir / "job.dat")]
+        status, _, _ = self._launch(args, max_time + 60, "idle", None if fullscreen else window,
+                                    "none" if fullscreen else position, cancel=cancel)
+        return status
+
     # --- replays -------------------------------------------------------------------
     def render_replay(self, replay: Path, video: bool = True, fps: float = 25.0, speed: float = 2.0,
                       view: str | dict | None = None, window: tuple[int, int] | None = None,
