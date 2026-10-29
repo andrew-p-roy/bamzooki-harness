@@ -239,7 +239,8 @@ then fewest test runs; random without qualifying).
 In the **knockout** (`/contest`) each round plays its element. Full rules: with fewer entrants the
 first elements are skipped, so the final always plays the last; with more, the extra early rounds
 are random. Short rules: **round 1 and the final always stay**, and rounds in between are dropped
-(the earliest first) or random ones added after round 1. A model plays the Zook it put forward for
+(the earliest first) or random ones added after round 1 (a single element is round 1, and every
+later round is random). A model plays the Zook it put forward for
 that round's challenge. Hidden full rules: each round's contest is **announced as the round
 starts** (drawn then if `""`, the same for every match in it) and each model in a match **picks one
 of its team Zooks**, each only once. A model with **no Zook for the round** (none put forward, no
@@ -573,5 +574,7 @@ Music/          the music (Lyria 3) and tracks.toml (loop points, tags, each con
 Model Instructions/  agent prompt, design guide, your manual copy (what models are told)
 challenges/     rules files: short.toml, full.toml (limits, scoring, hidden, qualifying, max_qualifiers)
 tools/          arena.py, run_contest.py, replay.py, challenge.py, extract.py, check_assets.py, spikes
-tests/          synthetic codec tests plus install-backed tests (skipped without an install)
+tests/          synthetic codec tests plus install-backed tests (skipped without an install);
+                test_modes.py: every rules/config combination; test_smoke.py: whole arena sessions
+                under every game mode (scripted models, a stand-in engine) and the real MCP server
 ```

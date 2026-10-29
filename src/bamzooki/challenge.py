@@ -210,24 +210,25 @@ class Session:
         """Short rules: the rounds for a knockout of `total` rounds. Round 1 (everyone designed and
         qualified for it) and the final (the last round) stay; middle rounds are dropped, the
         earliest first, or random ones are added after round 1 (drawn now unless hidden). One
-        knockout round plays round 1. Returns what changed, for the operator."""
+        knockout round plays round 1; a single planned round is round 1, with random rounds after
+        it. Returns what changed, for the operator."""
         n = len(self.rounds)
         if not self.round_by_round or total < 1 or total == n:
             return []
         rng = rng or random.Random()
-        first, middle, last = self.rounds[0], self.rounds[1:-1], self.rounds[-1]
+        first, middle, last = self.rounds[0], self.rounds[1:-1], self.rounds[1:][-1:]
         if total == 1:
             new, dropped, added = [first], self.rounds[1:], 0
         else:
-            keep = middle[len(middle) - min(len(middle), total - 2):]
-            dropped, added = middle[:len(middle) - len(keep)], total - 2 - len(keep)
+            keep = middle[len(middle) - min(len(middle), total - 1 - len(last)):]
+            dropped, added = middle[:len(middle) - len(keep)], total - 1 - len(last) - len(keep)
             cs = [m.contest for m in self.rounds] + [""] * added
             ops = [m.opponent for m in self.rounds] + [""] * added
             if not self.hidden:
                 cs, ops = _fill(cs, list(contest_pool), rng), _fill(ops, list(opponent_pool), rng)
             extra = [Match(c, o, self.rules.seed if self.rules.seed is not None else rng.randint(1, 999_999),
                            self.rules.side) for c, o in zip(cs[n:], ops[n:])]
-            new = [first, *extra, *keep, last]
+            new = [first, *extra, *keep, *last]
         out = []
         if dropped:
             out.append(f"dropped: {', '.join(m.contest or 'a secret contest' for m in dropped)}")
@@ -428,10 +429,11 @@ def plan_from_config(cfg, rules: str | Path | None = None, install=None,
     inst = install or Install.discover()
     pool = [n for n, c in catalog.catalog(inst).items() if c.players == 2 and c.in_pack]
     examples = sorted({p.parent.name for p in inst.example_zooks() if "Teams" in p.parts})
-    picked = _as_list(a.get("contest", DEFAULT_ROUNDS[0]))
     against = _as_list(a.get("opponent", DEFAULT_ROUNDS[1]))
-    for c in filter(None, picked):
-        catalog.find(c, inst)  # a misspelt contest fails here, naming the real ones
+    # by its own name ("zook sumo" or "CP_ZOOK_SUMO" is Zook Sumo, so it isn't drawn again); a
+    # misspelt contest fails here, naming the real ones
+    picked = [catalog.find(c, inst).name if str(c or "").strip() else c
+              for c in _as_list(a.get("contest", DEFAULT_ROUNDS[0]))]
     for o in filter(None, against):
         if o not in examples and "/" not in o:
             raise ValueError(f"[arena] opponent {o!r}: use an example Zook ({', '.join(examples)}) or \"\"")
