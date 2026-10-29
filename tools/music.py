@@ -1,6 +1,7 @@
 """Match music for the highlights reel (Music/tracks.toml).
 
-  python tools/music.py list                         the tracks, and which one each challenge gets
+  python tools/music.py list                         the tracks, which one each contest gets under
+                                                     each rules file, and the design songs
   python tools/music.py analyse Music/new_track.mp3  tempo, fade and loop points: a [tracks.<name>]
                                                      entry to paste into Music/tracks.toml
   python tools/music.py loop synth_funk out.mp3 [--times 3]
@@ -44,10 +45,13 @@ def main() -> None:
             print(f"{t.name:22s} {t.bpm or '?':>7} BPM  loop {loop:16s} {'DEFAULT ' if t.default else ''}"
                   f"tags: {', '.join(t.tags)}")
         print()
+        contests = sorted({c for t in tracks.values() for c in t.contests})
         for path in sorted((REPO_ROOT / "challenges").glob("*.toml")):
             c = Challenge.load(path)
-            t = music.pick_track(tracks, c)
-            print(f"{path.name:18s} -> {t.name if t else 'silence'}")
+            for contest in contests or [""]:
+                t = music.pick_track(tracks, c, contest)
+                print(f"{path.name:12s} {contest.title():26s} -> {t.name if t else 'silence'}")
+        print(f"\ndesign songs: {', '.join(t.name for t in music.design_songs(tracks)) or 'none'}")
     elif a.cmd == "analyse":
         for f in a.files:
             print(music.toml_entry(f.stem, f.name, music.analyse(f)))

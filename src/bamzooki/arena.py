@@ -42,9 +42,12 @@ anthropic/claude-haiku-5.5; --no-announcer) introduces each challenger (maker, r
 country, trivia) and calls the games (--speak reads it aloud); in the knockout both models see the
 other's Zook and say a line before each match, and afterwards they are interviewed with stills of
 how the game ended; while a model presents its Zook, the Zook stands on a turntable in the engine
-until /next; returning champions' Hall of Fame records are mentioned. Its knockout games
-also play their sound live: a starting beeper on the countdown and the match music looping from Go
-(the game videos and the highlights have it either way).
+until /next; returning champions' Hall of Fame records are mentioned. Its qualifying and
+knockout games also play their sound live: a starting beeper on the countdown and the contest's
+music looping from Go (the game videos and the highlights have it either way). And through the
+design phases (trials and practice games included) the design songs play one after another, round
+and round, fading out for a qualifying game and for the knockout's games. --nomusic: no music
+anywhere, live or in the videos (the beeps stay).
 
 --verbose streams its reasoning and notes as it writes them and shows them, and its tool
 arguments, in full (normally each reply is shown when complete, cut to 100 words).
@@ -305,7 +308,8 @@ class Arena:
                  temperature: float | None = None, auto: bool = False, verbose: bool = False,
                  show: bool = False, announcer: str | None = DEFAULT_ANNOUNCER,
                  announcer_style: str = "ringside", speak: bool = False, voice: str | None = None,
-                 monitor: bool = False, fullscreen: bool = False, commentator: str | None = None):
+                 monitor: bool = False, fullscreen: bool = False, commentator: str | None = None,
+                 play_music: bool = True):
         self.cfg = load_config()
         # --monitor: test and tournament games put the engine window on the right half of the main
         # screen with a 4:3 picture (at most 1080p's half) in it, leaving the left for this terminal.
@@ -335,6 +339,11 @@ class Arena:
         # interviews and Hall of Fame mentions (all extra model calls). Off, the arena only calls the
         # models for their own work, the champion's speech and what the audience says to them.
         self.show = show
+        # The music under the games (False: --nomusic) and, with the show, the design phases' songs.
+        from .runner.audio import Playlist
+
+        self.play_music = play_music
+        self.design_music = Playlist(music.design_songs(music.load_tracks())) if show and play_music else None
         self.announcer = Announcer(self.router, announcer, announcer_style) if show and announcer else None
         self.voice = None
         if speak and self.announcer:
@@ -392,7 +401,8 @@ class Arena:
             command=sys.executable,
             args=["-m", "bamzooki.mcp_server", "--model", model, "--session", str(self.session_file),
                   "--position", self.position] + (["--view-fit", "{},{}".format(*self.view_fit)] if self.view_fit else [])
-                 + (["--full-screen"] if self.fullscreen else []) + (["--live-sound"] if self.show else []),
+                 + (["--full-screen"] if self.fullscreen else []) + (["--live-sound"] if self.show else [])
+                 + ([] if self.play_music else ["--no-music"]),
             cwd=str(self.arena_dir), env=env)
         # The server's own output (tracebacks from tools a model called wrongly) goes beside the
         # transcript, not over the audience's screen; the model still gets the error as the result.
@@ -535,6 +545,7 @@ class Arena:
     # --- the agent loop ---
     async def start(self, model: str) -> None:
         self._showcase_stop()  # /next (or another challenger): the last presentation is over
+        self._design_music(True)
         info = await self.router.model_info(model)
         if not info:
             say(f"Unknown OpenRouter model {model!r} (check the id at openrouter.ai/models).", "r")
@@ -685,7 +696,11 @@ class Arena:
         if args is None:
             text = bad
         else:
+            # a qualifying game plays its contest's music: the design songs make way for it
+            qualifying = name == "submit_design" and self.plan.qualifying_in((self.plan.current or 0) + 1)
             try:
+                if qualifying:
+                    self._design_music(False)
                 res = await self.session.call_tool(name, args)
                 texts, first = [], None
                 for c in res.content:
@@ -700,6 +715,9 @@ class Arena:
                     text = "ERROR: " + text
             except Exception as err:
                 text = f"ERROR: {err}"
+            finally:
+                if qualifying:
+                    self._design_music(True)
         self._summarise(name, first if args is not None and first else text)
         self._log(f"tool {name}", f"args: {json.dumps(args)[:2000]}\n\nresult: {text[:4000]}")
         e.messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": text})
@@ -796,6 +814,11 @@ class Arena:
                                           "fullscreen": self.fullscreen})
         thread.start()
         self._showcase = (thread, cancel)
+
+    def _design_music(self, on: bool) -> None:
+        """The design songs (with the show): on through the design phases, off for the games."""
+        if self.design_music:
+            (self.design_music.play if on else self.design_music.pause)()
 
     def _showcase_stop(self) -> None:
         if showcase := getattr(self, "_showcase", None):
@@ -927,6 +950,7 @@ class Arena:
         exhibition: one match between the two given seats on the last round's contest, without the
         speech or a ranking."""
         self._showcase_stop()
+        self._design_music(False)  # the games have their own music
         seeded = False
         if seats is None:
             ranked = self._seeding([e for e in self.entrants.values() if e.qualified and e.design])
@@ -952,7 +976,7 @@ class Arena:
             for change in self.plan.fit(total, pool, zoo.example_names()):
                 say(f"  {len(seats)} models in the knockout need {total} round(s): {change}", "y")
             self.save_session()
-        tracks = music.load_tracks()
+        tracks = music.load_tracks() if self.play_music else {}  # no tracks: silent games and reel
         kind = "exhibition" if exhibition else "knockout"
         # the round's contest and music, its session round ("slot", 1-based; None = an extra early
         # round), video titles, and the last game's (video, finish)
@@ -1204,10 +1228,12 @@ class Arena:
         MCP servers read the open round from the session file)."""
         self.plan.current = slot
         self.save_session()
+        self._design_music(True)
         for s in seats:
             await self._safely(self.design(self.entrants[s.model], slot, round_name))
             await self._settle(4 if self.show else 0)
         self._showcase_stop()
+        self._design_music(False)
         await self._disconnect()
 
     async def design(self, e: Entrant, slot: int, round_name: str) -> None:
@@ -1950,6 +1976,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--commentator", nargs="?", const=COMMENTATOR, default=a_cfg.get("commentator"),
                     help=f"with --showtime --speak: live commentary on the knockout games by this vision model "
                          f"(off unless given; --commentator alone uses {COMMENTATOR}; [arena] commentator)")
+    ap.add_argument("--nomusic", "--no-music", action="store_true", default=not a_cfg.get("music", True),
+                    help="no music: not under the games (live or in their videos and the highlights) and not "
+                         "through the design phases; the countdown beeps stay ([arena] music = false)")
     screen = ap.add_mutually_exclusive_group()
     screen.add_argument("--monitor", action="store_true", default=bool(a_cfg.get("monitor", False)),
                         help="single-monitor mode: test and tournament games put the engine window on the right half "
@@ -1972,11 +2001,16 @@ def main(argv: list[str] | None = None) -> None:
                   announcer=None if a.no_announcer or str(a.announcer).lower() in ("", "none", "off") else a.announcer,
                   announcer_style=a.announcer_style, speak=a.speak, voice=a.voice, monitor=a.monitor,
                   fullscreen=a.full_screen,
-                  commentator=None if str(a.commentator).lower() in ("", "none", "off") else a.commentator)
+                  commentator=None if str(a.commentator).lower() in ("", "none", "off") else a.commentator,
+                  play_music=not a.nomusic)
     if not a.keep_entries and (moved := arena.archive_entries()):
         say(f"Previous Zook Entries archived to {moved}: every model starts afresh (--keep-entries to carry on).",
             "dim")
     arena.save_session()
     say(f"Rules: {session.rules.name}{' (challenges hidden)' if session.hidden else ''}"
         f"{arena._rounds_line() if not session.hidden else ''}", "dim")
-    asyncio.run(arena.repl())
+    try:
+        asyncio.run(arena.repl())
+    finally:
+        if arena.design_music:
+            arena.design_music.close()

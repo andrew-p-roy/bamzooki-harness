@@ -51,17 +51,18 @@ class Studio:
     def __init__(self, model: str | None = "manual", engine: Engine | None = None,
                  challenge: Challenge | None = None, position: str = "none",
                  view_fit: tuple[float, int] | None = None, fullscreen: bool = False, live_sound: bool = False,
-                 session: Session | None = None):
+                 session: Session | None = None, music: bool = True):
         """model: the entrant's full model name (e.g. "anthropic/claude-sonnet-4.5"); its folder
         is "Zook Entries/<name with / replaced>". None = the model registers itself first.
         session: the rounds under the rules (its rules replace `challenge`); a challenge alone gets
         the default single round (Zook Sumo against Spider).
         position, view_fit, fullscreen: how test games and the challenge game show the engine (as in Job).
         live_sound: the challenge game's countdown beeps and music also play on this computer (the
-        video has them either way)."""
+        video has them either way).
+        music: the challenge game has its contest's music (False: only the beeps)."""
         self.engine = engine or Engine()
         self.position, self.view_fit, self.fullscreen = position, view_fit, fullscreen
-        self.live_sound = live_sound
+        self.live_sound, self.music = live_sound, music
         self.install = self.engine.install
         self.engine.prepare()
         self.zoo = Zoo(self.install, examples_root=self.engine.root / "Teams" / "examples" / "Creatures")
@@ -497,7 +498,8 @@ class Studio:
         job = Job(info, green.path, red.path if red else None, seed=g.seed, video=True, model=self.model,
                   duration=self.challenge.time_limit, position=self.position, view_fit=self.view_fit,
                   fullscreen=self.fullscreen, countdown=True,
-                  music=music.pick_track(music.load_tracks(), self.challenge, g.contest), live_sound=self.live_sound,
+                  music=music.pick_track(music.load_tracks(), self.challenge, g.contest) if self.music else None,
+                  live_sound=self.live_sound,
                   video_path=self._video_path(f"Qualifying round {round_no} - {self.challenge.name} - {info.name} - "
                                               f"{_short(mine)} vs {_short(opp)}"))
         with self.lock:

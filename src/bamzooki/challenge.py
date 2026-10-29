@@ -6,7 +6,8 @@ The rules are a TOML file, chosen by `challenge_rules` in bamzooki.toml [arena] 
     name = "short"                   # used in state file names
     title = "..."
     description = \"\"\"...\"\"\"          # the general rules, shown to the model by get_challenge
-    music = "synth_funk"             # optional: the highlights reel's track (Music/tracks.toml; "none" = silent)
+    music = "synth_funk"             # optional: one track for every game (Music/tracks.toml; "none" = silent;
+                                     #   unset: each contest's own, [contests] in tracks.toml)
     hidden = false                   # true: models aren't told the rounds' contests (bamzooki.toml may override)
     qualifying = "first"             # short rules: qualifying games in the "first" round only, "all" rounds, "none"
     max_qualifiers = 8               # models in the knockout: the first this many to qualify ("" = no limit)

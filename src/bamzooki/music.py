@@ -1,9 +1,12 @@
-"""Match music for the knockout (live under each game, and in the highlights reel): the tracks in
-Music/, their loop points, and which one a challenge gets.
+"""The arena's music (live under each qualifying and knockout game, in the highlights reel, and
+through the design phases): the tracks in Music/, their loop points, and which one a game gets.
 
-    Music/tracks.toml      one [tracks.<name>] table per track: file, loop points, tempo, tags
-    pick_track(tracks, challenge)   the challenge's own `music = "<name>"`, else the first track
-                                    tagged with its contest, else the default track
+    Music/tracks.toml      one [tracks.<name>] table per track: file, loop points, tempo, tags;
+                           [contests]: each contest's own track
+    pick_track(tracks, challenge, contest)   the challenge's own `music = "<name>"`, else the
+                                    contest's track in [contests], else the first track tagged
+                                    with the contest, else the default track
+    design_songs(tracks)   the design phases' songs (tagged "design"), in the order listed
     loop_wav(track, out)   the part that repeats, as a WAV
     analyse(mp3)           tempo, first beat, fade start and a loop of whole bars before the fade
                            (python tools/music.py analyse Music/<file>.mp3 prints a table to paste)
@@ -39,6 +42,7 @@ class Track:
     tags: list[str] = field(default_factory=list)  # contests, moods: for choosing a track by challenge
     default: bool = False
     volume: float = 1.0  # gain under the games
+    contests: list[str] = field(default_factory=list)  # the contests it's chosen for ([contests])
 
 
 def load_tracks(path: Path = TRACKS_FILE) -> dict[str, Track]:
@@ -47,6 +51,9 @@ def load_tracks(path: Path = TRACKS_FILE) -> dict[str, Track]:
         raw = tomllib.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError):
         return {}
+    chosen: dict[str, list[str]] = {}
+    for contest, name in (raw.get("contests") or {}).items():
+        chosen.setdefault(str(name), []).append(str(contest).lower())
     out = {}
     for name, t in (raw.get("tracks") or {}).items():
         file = Path(path).parent / str(t.get("file", f"{name}.mp3"))
@@ -54,14 +61,14 @@ def load_tracks(path: Path = TRACKS_FILE) -> dict[str, Track]:
             out[name] = Track(name, file, float(t.get("loop_start", 0.0)),
                               float(t["loop_end"]) if t.get("loop_end") is not None else None,
                               t.get("bpm"), [str(x).lower() for x in t.get("tags", [])], bool(t.get("default")),
-                              float(t.get("volume", 1.0)))
+                              float(t.get("volume", 1.0)), chosen.get(name, []))
     return out
 
 
 def pick_track(tracks: dict[str, Track], challenge=None, contest: str = "") -> Track | None:
     """The music for a challenge's game: the rules' own `music = "<track>"` (or "none" for silence),
-    else the first track tagged with the game's contest (e.g. "zook sumo"), else the default track,
-    else any track."""
+    else the contest's own track ([contests] in tracks.toml), else the first track tagged with the
+    game's contest (e.g. "zook sumo"), else the default track, else any track."""
     if not tracks:
         return None
     wanted = str(getattr(challenge, "music", "") or "").strip()
@@ -71,10 +78,16 @@ def pick_track(tracks: dict[str, Track], challenge=None, contest: str = "") -> T
         return tracks[wanted]
     contest = contest.lower()
     if contest:
-        for t in tracks.values():
-            if contest in t.tags:
-                return t
+        for listed in ("contests", "tags"):
+            for t in tracks.values():
+                if contest in getattr(t, listed):
+                    return t
     return next((t for t in tracks.values() if t.default), next(iter(tracks.values())))
+
+
+def design_songs(tracks: dict[str, Track]) -> list[Track]:
+    """The songs played one after another through the design phases: the tracks tagged "design"."""
+    return [t for t in tracks.values() if "design" in t.tags]
 
 
 def loop_wav(track: Track, out: Path, ffmpeg: str | None = None) -> Path | None:

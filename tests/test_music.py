@@ -60,10 +60,90 @@ def test_tracks_and_pick(tmp_path):
     assert music.load_tracks(tmp_path / "nothing.toml") == {}
 
 
+def test_contest_choices_come_before_tags(tmp_path):
+    for name in ("tagged", "chosen", "song"):
+        (tmp_path / f"{name}.mp3").write_bytes(b"x")
+    (tmp_path / "tracks.toml").write_text(
+        '[contests]\n"Zook Sumo" = "chosen"\n"Zook Marbles" = "chosen"\n'
+        '[tracks.tagged]\nfile = "tagged.mp3"\ntags = ["zook sumo"]\n'
+        '[tracks.chosen]\nfile = "chosen.mp3"\n'
+        '[tracks.song]\nfile = "song.mp3"\ntags = ["design"]\n', encoding="utf-8")
+    tracks = music.load_tracks(tmp_path / "tracks.toml")
+    assert tracks["chosen"].contests == ["zook sumo", "zook marbles"]
+    assert music.pick_track(tracks, SimpleNamespace(music=""), "Zook Sumo").name == "chosen"
+    assert music.pick_track(tracks, SimpleNamespace(music="tagged"), "Zook Sumo").name == "tagged"  # the rules win
+    assert [t.name for t in music.design_songs(tracks)] == ["song"]
+
+
 def test_challenge_music_field():
     from bamzooki.challenge import Challenge
 
-    assert Challenge.load().music == "synth_funk"
+    assert Challenge.load().music == ""  # each contest plays its own track
+
+
+def test_repo_contests_each_have_their_track():
+    tracks = music.load_tracks()
+    if not tracks:
+        pytest.skip("no Music/ folder")
+    for contest in ("Dodgy Zook", "Merry Go Zook", "Weakest Zook", "Zookball Green To Score", "Zookball Red To Score",
+                    "Zook Marbles", "Zook Smash", "Zook Sumo", "Zook Hurdles"):
+        assert contest.lower() in music.pick_track(tracks, None, contest).contests
+    assert music.pick_track(tracks, None, "Zook Sumo").name == "sumo_wrestling_entrance"
+    assert music.pick_track(tracks, None, "Zookball Red To Score").name == "marbles_jazz_funk_race"
+    assert [t.name for t in music.design_songs(tracks)] == ["design_berlin_school", "design_dream_pop",
+                                                            "design_lofi_beats"]
+
+
+class _FakeMCI:
+    """Stands in for Windows' MCI: records the commands; a song 'ends' when told to."""
+
+    def __init__(self):
+        self.log, self.mode = [], "playing"
+
+    def __call__(self, command):
+        if not command.startswith("setaudio"):
+            self.log.append(command)
+        return True
+
+    def open(self, path, alias):
+        self.log.append(f"open {Path(path).name}")
+        self.mode = "playing"
+        return True
+
+    def status(self, alias, what):
+        return self.mode
+
+
+def test_playlist_plays_on_pauses_in_place_and_moves_to_the_next_song(tmp_path):
+    import time
+
+    from bamzooki.runner.audio import Playlist
+
+    songs = [music.Track(n, tmp_path / f"{n}.mp3") for n in ("one", "two")]
+    mci = _FakeMCI()
+    pl = Playlist(songs, fade=0.02, poll=0.01, mci=mci)
+
+    def wait_for(cond):
+        end = time.time() + 3
+        while not cond() and time.time() < end:
+            time.sleep(0.01)
+        assert cond(), mci.log
+
+    pl.pause()  # nothing playing yet: nothing starts
+    assert pl._thread is None
+    pl.play()
+    wait_for(lambda: mci.log[-1:] == ["play playlist"])
+    pl.pause()
+    wait_for(lambda: mci.log[-1:] == ["pause playlist"])
+    pl.play()  # carries on in the same song
+    wait_for(lambda: mci.log.count("play playlist") == 2)
+    assert mci.log.count("open one.mp3") == 1
+    mci.mode = "stopped"  # the song ends: the next one, then round again
+    wait_for(lambda: "open two.mp3" in mci.log)
+    mci.mode = "stopped"
+    wait_for(lambda: mci.log.count("open one.mp3") == 2)
+    pl.close()
+    assert mci.log[-2:] == ["stop playlist", "close playlist"]
 
 
 def test_repo_tracks_are_listed_and_synth_funk_is_the_default():

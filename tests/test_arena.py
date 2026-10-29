@@ -851,3 +851,37 @@ def test_hidden_team_picks_each_zook_once():
     assert used == {"lab_alpha/Crusher@1", "lab_alpha/Stomp@1", "lab_alpha/Hopper@1"} and len(a.router.seen) == 2
     assert a._knockout_options(e, 1, used, False) == []  # the team is used up: it forfeits
     assert len(a._knockout_options(e, None, used, False)) == 3  # an extra early round: any of them
+
+
+def test_design_music_makes_way_only_for_a_qualifying_game():
+    from types import SimpleNamespace
+
+    heard = []
+
+    class Songs:
+        def play(self):
+            heard.append("play")
+
+        def pause(self):
+            heard.append("pause")
+
+    class Server:
+        async def call_tool(self, name, args):
+            heard.append(name)
+            return SimpleNamespace(content=[SimpleNamespace(type="text", text="{}")], isError=False)
+
+    a = arena(Router(), keyboard())
+    del a._run_tool  # the real one
+    a.session, a.design_music, a.entrant.transcript = Server(), Songs(), None
+    a.plan.current = 0  # round 1's design phase: qualifying (short rules, qualifying = "first")
+
+    def call(name):
+        heard.clear()
+        asyncio.run(a._run_tool({"id": "1", "function": {"name": name, "arguments": "{}"}}))
+        return heard
+
+    assert call("run_trial") == ["run_trial"]  # trials and practice games: the songs play on
+    assert call("run_contest") == ["run_contest"]
+    assert call("submit_design") == ["pause", "submit_design", "play"]  # the qualifying game's own music
+    a.plan.current = 1  # a later round's design phase: no qualifying game
+    assert call("submit_design") == ["submit_design"]

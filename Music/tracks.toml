@@ -1,6 +1,8 @@
-# Match music for the knockout highlights reel (src/bamzooki/music.py).
+# The arena's music (src/bamzooki/music.py): under qualifying and knockout games, in the highlights
+# reel, and (the tracks tagged "design", one after another) through the design phases. With
+# --showtime it also plays live; --nomusic turns it all off.
 #
-# Every track is an original 30 s instrumental clip made with Google's Lyria 3
+# Every game track is an original 30 s instrumental clip made with Google's Lyria 3
 # (google/lyria-3-clip-preview through OpenRouter, $0.04 a clip), so none of it carries copyright
 # claims. Each clip's prompt started with:
 #   "Instrumental only, absolutely no vocals or spoken words. Full energy from the very first beat to
@@ -12,8 +14,20 @@
 # game ends. Loop points come from `python tools/music.py analyse Music/<file>.mp3`: the tempo, then
 # whole 4-bar phrases from the first beat that end before any fade at the end of the clip.
 #
-# Which track plays: a challenge's own `music = "<name>"` ("none" = silent), else the first track
-# whose tags include the challenge's contest (e.g. "zook sumo"), else the one with default = true.
+# Which track plays under a game: a challenge's own `music = "<name>"` ("none" = silent), else the
+# contest's track in [contests] below, else the first track whose tags include the contest (e.g.
+# "zook sumo"), else the one with default = true.
+
+[contests]  # each contest's own track (the other tracks stay listed, to swap in)
+"Dodgy Zook" = "dodgy_spy_caper"
+"Zook Hurdles" = "hurdles_athletics_theme"
+"Zook Marbles" = "marbles_bouncy_marimba"
+"Merry Go Zook" = "merrygo_carousel_synth"
+"Zook Smash" = "smash_big_beat"
+"Zook Sumo" = "sumo_wrestling_entrance"
+"Weakest Zook" = "weakest_suspense_show"
+"Zookball Green To Score" = "marbles_jazz_funk_race"
+"Zookball Red To Score" = "marbles_jazz_funk_race"
 
 [tracks.synth_funk]
 file = "synth_funk.mp3"
@@ -122,3 +136,242 @@ bpm = 127.7
 loop_start = 0.03
 loop_end = 30.1  # 16 bars, no fade
 tags = ["rock", "montage", "metal", "fast"]
+
+# --- Per-challenge options (October 2026): 3 clips per contest, tagged with its name. Made with
+# the same opening as above; loop points measured with the tempo searched near the one asked for
+# (the analyser's 90-180 folding misread several of these by 4:3 or 2:1).
+
+# Designing: three full-length chill songs (~3 min), played one after another, round and round,
+# through the design phases (trials and practice games included; a qualifying game has its contest's
+# track instead). Made with Lyria 3 Pro (google/lyria-3-pro-preview, $0.08 a song). Each fades in and
+# out gently, so each song plays whole. Each prompt started with:
+#   "Instrumental only, absolutely no vocals, no humming, no choir and no spoken words. A long, very chill piece of about three minutes, to play quietly in the background while inventors design robot creatures in a workshop: steady and unobtrusive all the way through, a gentle start and a gentle ending, no sudden loud parts and no big drops."
+
+[tracks.design_berlin_school]
+file = "design_berlin_school.mp3"
+prompt = "Slow 1970s Berlin-school electronic music made only with vintage analogue synthesizers: a hypnotic, softly pulsing sequencer pattern that evolves very slowly as its filter opens and closes, warm Mellotron-style string and choir-free pad chords, deep drifting bass drones, a long, singing analogue lead melody floating over the top, wide spacey reverb and gentle tape echo, no drums, the sequence pulsing at about 90 BPM, meditative, cosmic and dreamy."
+bpm = 90.1
+loop_start = 0.0  # the whole song: 170.37 s, fading in and out
+tags = ["design", "chill", "analogue", "ambient"]
+
+[tracks.design_dream_pop]
+file = "design_dream_pop.mp3"
+prompt = "Instrumental dreamy bedroom-pop and dream-pop groove: a smooth, melodic, rounded electric bass line high in the mix that carries the tune, clean chorus-soaked electric guitars playing gentle interlocking arpeggios and soft muted chords, hazy vintage synth pads and a little warm keyboard, a relaxed, softly played drum groove with brushed hi-hats and a gentle kick, about 95 BPM, mellow, warm, intimate and nostalgic, like a slow summer evening."
+bpm = 95.48
+loop_start = 0.0  # the whole song: 177.18 s, fading in and out
+tags = ["design", "chill", "dream pop", "guitar"]
+
+[tracks.design_lofi_beats]
+file = "design_lofi_beats.mp3"
+prompt = "Modern lo-fi hip-hop beats for relaxing and concentrating: dusty, softly swung boom-bap drums with a mellow kick and a crackly snare, warm jazzy electric-piano chords with rich sevenths and ninths, a round, soft sub bass, a gentle muted synth and guitar melody, tape wow and flutter, light vinyl crackle and a little rain-like texture, about 80 BPM, calm, cosy and mellow, the same easy groove all the way through."
+bpm = 82.01
+loop_start = 0.0  # the whole song: 177.21 s, fading in and out
+tags = ["design", "chill", "lofi", "beats"]
+
+# Zook Sumo: boxing-movie and wrestling rock
+
+[tracks.sumo_fight_anthem]
+file = "sumo_fight_anthem.mp3"
+prompt = "Late-1970s boxing-movie classic rock anthem: a big brass-section fanfare riff over chugging power chords, driving bass guitar, pounding drums with tom fills, 108 BPM, triumphant underdog energy, like a heavyweight walking to the ring."
+bpm = 108.56
+loop_start = 0.03
+loop_end = 17.716  # 8 bars; the clip fades from 23.5 s
+tags = ["zook sumo", "rock", "fight"]
+
+[tracks.sumo_taiko_rock]
+file = "sumo_taiko_rock.mp3"
+prompt = "Heavy classic rock meets Japanese taiko: a stomping palm-muted power-chord riff in E minor locked with thundering taiko drums and a crashing rock kit, gritty overdriven lead guitar answering phrases, 100 BPM, massive, weighty and determined, like two giants pushing in a ring."
+bpm = 99.98
+loop_start = 0.52
+loop_end = 29.326  # 12 bars; no fade
+tags = ["zook sumo", "rock", "taiko"]
+
+[tracks.sumo_wrestling_entrance]
+file = "sumo_wrestling_entrance.mp3"
+prompt = "1980s pro-wrestling entrance theme: a swaggering hard-rock guitar riff with stop-start band hits, synth-brass stabs, big gated-reverb snare, 112 BPM, cocky, loud and larger than life."
+bpm = 113.32
+loop_start = 0.03
+loop_end = 25.445  # 12 bars; the clip fades from 29.0 s
+tags = ["zook sumo", "rock", "wrestling"]
+
+# Merry Go Zook: fairground and spinning
+
+[tracks.merrygo_carousel_synth]
+file = "merrygo_carousel_synth.mp3"
+prompt = "1980s synth take on a fairground carousel tune in 4/4: a bright calliope-style organ synth melody, bouncing oom-pah synth bass, sparkling glockenspiel arpeggios, a light drum machine, 116 BPM, dizzy, cheerful and playful."
+bpm = 117.25
+loop_start = 0.05
+loop_end = 16.425  # 8 bars; the clip fades from 24.5 s
+tags = ["merry go zook", "fairground", "playful"]
+
+[tracks.merrygo_spinning_arps]
+file = "merrygo_spinning_arps.mp3"
+prompt = "Swirling 1980s synthwave: circling 16th-note arpeggios that rise and fall like a spinning ride, pulsing octave bass, gated-reverb drums, shimmering pads, 120 BPM, giddy and exciting."
+bpm = 120.0
+loop_start = 0.44
+loop_end = 16.44  # 8 bars; the clip fades from 22.0 s
+tags = ["merry go zook", "synthwave", "spinning"]
+
+[tracks.merrygo_circus_funk]
+file = "merrygo_circus_funk.mp3"
+prompt = "Wobbly circus-funk: a cheeky chromatic synth-organ melody, slap-style synth bass, honking synth-brass, tight funky drum-machine beat with handclaps, 114 BPM, mischievous and off-balance in a fun way."
+bpm = 113.68
+loop_start = 0.03
+loop_end = 16.92  # 8 bars; the clip fades from 24.0 s
+tags = ["merry go zook", "circus", "funk"]
+
+# Weakest Zook: tense showdowns over the pit
+
+[tracks.weakest_tug_of_war]
+file = "weakest_tug_of_war.mp3"
+prompt = "Gritty blues-rock showdown: a heavy stomping riff on low guitar and bass in unison, handclaps and a thudding kick on every beat, crunchy slide-guitar answers, 98 BPM, tense, sweaty and stubborn, like a tug of war over a pit."
+bpm = 98.41
+loop_start = 0.03
+loop_end = 29.295  # 12 bars; no fade
+tags = ["weakest zook", "rock", "tense"]
+
+[tracks.weakest_suspense_show]
+file = "weakest_suspense_show.mp3"
+prompt = "1980s game-show suspense music: a ticking hi-hat pattern, pulsing staccato synth bass, ominous minor-key synth-brass stabs, gated drums, 108 BPM, edge-of-the-seat tension with a playful wink."
+bpm = 107.9
+loop_start = 0.03
+loop_end = 26.721  # 12 bars; no fade
+tags = ["weakest zook", "game show", "tense"]
+
+[tracks.weakest_dark_synth_rock]
+file = "weakest_dark_synth_rock.mp3"
+prompt = "Dark 1980s synth-rock duel: a menacing minor-key analog synth riff doubled by distorted guitar, driving eighth-note bass, big gated-reverb snare, 110 BPM, grim, determined, a fight on the edge."
+bpm = 110.74
+loop_start = 0.03
+loop_end = 26.037  # 12 bars; no fade
+tags = ["weakest zook", "synth", "dark"]
+
+# Zookball (both sides): football TV, terraces and carnival
+
+[tracks.zookball_tv_highlights]
+file = "zookball_tv_highlights.mp3"
+prompt = "1980s television football highlights theme: triumphant synth-brass fanfare stabs, bouncing synth bass, punchy gated drums with stadium-sized claps, 124 BPM, upbeat, competitive and celebratory."
+bpm = 125.55
+loop_start = 0.03
+loop_end = 30.615  # 16 bars; no fade
+tags = ["zookball green to score", "zookball red to score", "sports", "triumphant"]
+
+[tracks.zookball_terrace_stomp]
+file = "zookball_terrace_stomp.mp3"
+prompt = "Football-terrace glam-rock stomp: a stomp-stomp-clap drum beat, crunchy glam guitar riff, booming bass, rousing synth-brass melody, 118 BPM, rowdy, proud and anthemic."
+bpm = 117.78
+loop_start = 0.33
+loop_end = 24.782  # 12 bars; no fade
+tags = ["zookball green to score", "zookball red to score", "rock", "stomp"]
+
+[tracks.zookball_samba_synth]
+file = "zookball_samba_synth.mp3"
+prompt = "1980s synth-samba carnival: busy samba percussion with surdo drums, shakers and agogo bells, a bright synth-brass melody, funky synth bass, 120 BPM, joyful, fast-footed and festive."
+bpm = 119.99
+loop_start = 0.05
+loop_end = 24.052  # 12 bars; no fade
+tags = ["zookball green to score", "zookball red to score", "samba", "carnival"]
+
+# Zook Marbles: rolling, bouncy races
+
+[tracks.marbles_bouncy_marimba]
+file = "marbles_bouncy_marimba.mp3"
+prompt = "Bouncy 1980s synth-pop marble-run music: plinky synth marimba and xylophone runs that roll up and down, rubbery synth bass, crisp drum machine, 126 BPM, quick, light and cheerful, like marbles racing down a track."
+bpm = 125.62
+loop_start = 0.16
+loop_end = 30.728  # 16 bars; no fade
+tags = ["zook marbles", "bouncy", "race"]
+
+[tracks.marbles_jazz_funk_race]
+file = "marbles_jazz_funk_race.mp3"
+prompt = "1980s jazz-funk fusion race: a rolling fretless-style synth bassline, sparkling electric piano chords, a fast synth lead, tight funky drums, 122 BPM, slick, nimble and exciting."
+bpm = 122.28
+loop_start = 0.03
+loop_end = 23.583  # 12 bars; no fade
+tags = ["zook marbles", "funk", "race"]
+
+[tracks.marbles_rolling_italo]
+file = "marbles_rolling_italo.mp3"
+prompt = "Rolling 1980s Italo-disco race: a galloping sequenced octave synth bass, glossy synth lead, four-on-the-floor drum machine with open hi-hats, 124 BPM, sleek, forward-moving and bright."
+bpm = 124.44
+loop_start = 0.03
+loop_end = 23.174  # 12 bars; no fade; its first ~9 s are about 2 dB quieter
+tags = ["zook marbles", "disco", "race"]
+
+# Zook Smash: demolition
+
+[tracks.smash_demolition_rock]
+file = "smash_demolition_rock.mp3"
+prompt = "1980s demolition hard rock: a crunching power-chord riff with smashing stop-start crash hits, thundering drums, growling bass, a squealing lead guitar fill, 120 BPM, destructive, loud and fun."
+bpm = 120.02
+loop_start = 0.39
+loop_end = 24.386  # 12 bars; no fade
+tags = ["zook smash", "rock", "heavy"]
+
+[tracks.smash_big_beat]
+file = "smash_big_beat.mp3"
+prompt = "Big-beat breakbeat: a fat distorted funk drum break, buzzing acid-style synth bass, crunchy guitar stabs and synth sirens, 118 BPM, rowdy and smashing."
+bpm = 117.69
+loop_start = 0.03
+loop_end = 24.501  # 12 bars; no fade
+tags = ["zook smash", "breakbeat", "heavy"]
+
+[tracks.smash_industrial_stomp]
+file = "smash_industrial_stomp.mp3"
+prompt = "1980s industrial synth stomp: clanging metallic percussion, a heavy pounding drum machine, grinding analog synth bass riff, sharp synth-brass hits, 112 BPM, mechanical, brutal and driving, like robots crashing through walls."
+bpm = 111.78
+loop_start = 0.37
+loop_end = 26.135  # 12 bars; no fade
+tags = ["zook smash", "industrial", "stomp"]
+
+# Zook Hurdles: athletics and jumping
+
+[tracks.hurdles_athletics_theme]
+file = "hurdles_athletics_theme.mp3"
+prompt = "1980s athletics-championship TV theme: soaring heroic synth-brass melody, a galloping sequenced bass, big gated drums with leaping tom fills, 126 BPM, uplifting, athletic and determined."
+bpm = 125.89
+loop_start = 0.24
+loop_end = 30.743  # 16 bars; no fade
+tags = ["zook hurdles", "sports", "heroic"]
+
+[tracks.hurdles_hop_funk]
+file = "hurdles_hop_funk.mp3"
+prompt = "Springy 1980s funk: a hopping staccato synth riff that jumps up an octave every bar, slap-style synth bass, crisp drum machine with handclaps, 120 BPM, bouncy, sporty and playful, like leaping over hurdles."
+bpm = 120.01
+loop_start = 0.01
+loop_end = 24.008  # 12 bars; no fade
+tags = ["zook hurdles", "funk", "bouncy"]
+
+[tracks.hurdles_sprint_synth_rock]
+file = "hurdles_sprint_synth_rock.mp3"
+prompt = "1980s sprint synth-rock: a driving eighth-note guitar chug under a bright synth lead, pulsing bass, energetic gated drums, 128 BPM, fast, focused and heroic."
+bpm = 127.82
+loop_start = 0.37
+loop_end = 22.902  # 12 bars; the clip fades from 29.5 s
+tags = ["zook hurdles", "rock", "driving"]
+
+# Dodgy Zook: sneaky and darting
+
+[tracks.dodgy_spy_caper]
+file = "dodgy_spy_caper.mp3"
+prompt = "1980s spy-caper synth funk: a sneaky minor-key synth bassline, twangy surf-style guitar licks, muted brass stabs, tight drum machine with rimshots, 112 BPM, sly, sneaky and fun."
+bpm = 111.96
+loop_start = 0.2
+loop_end = 25.923  # 12 bars; no fade
+tags = ["dodgy zook", "spy", "sneaky"]
+
+[tracks.dodgy_cartoon_chase]
+file = "dodgy_cartoon_chase.mp3"
+prompt = "1980s cartoon chase music: zig-zagging square-wave synth melody that darts around, bouncy synth bass, snappy drum machine with woodblocks, 126 BPM, frantic, cheeky and nimble."
+bpm = 125.71
+loop_start = 7.706
+loop_end = 30.616  # 12 bars; no fade; starts 4 bars in, after a quieter build-up
+tags = ["dodgy zook", "cartoon", "chase"]
+
+[tracks.dodgy_zigzag_arcade]
+file = "dodgy_zigzag_arcade.mp3"
+prompt = "1980s arcade maze-game music: quick darting FM synth lead that changes direction, a pulsing bass, crisp electronic drums, 122 BPM, twitchy, clever and energetic."
+bpm = 122.25
+loop_start = 0.0
+loop_end = 23.558  # 12 bars; no fade
+tags = ["dodgy zook", "arcade", "nimble"]

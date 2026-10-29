@@ -11,7 +11,8 @@
 
 name = "short"
 title = "The short BAMZOOKi challenge"
-music = "synth_funk"                     # the highlights reel's track (Music/tracks.toml; "none" = silent)
+# music = "synth_funk"                   # one track for every game ("none" = silent); unset, each contest
+                                         #   plays its own ([contests] in Music/tracks.toml)
 hidden = false                           # the models are told each round's contest and opponent
 qualifying = "first"                     # qualifying games: "first" round only, "all" rounds, "none"
                                          #   (all: a later round's lost qualifying game forfeits its match)

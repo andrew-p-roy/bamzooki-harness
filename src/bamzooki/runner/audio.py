@@ -1,5 +1,6 @@
 """Sound for games played live: a beep on each count of the countdown (higher on Go), and match
-music looping under the game from Go, fading out as it ends (like the highlights reel).
+music looping under the game from Go, fading out as it ends (like the highlights reel). And
+Playlist: songs one after another, round and round (the design phases' music).
 
 The engine's own Sound component (Sound.Play / Sound.Stream) plays nothing in this build, so the
 sound comes from this computer instead, in step with the game: the driver logs each count
@@ -117,6 +118,9 @@ class _MCI:
     def open(self, path: Path, alias: str) -> bool:
         return self(f'open "{Path(path).resolve()}" type mpegvideo alias {alias}')
 
+    def status(self, alias: str, what: str) -> str:
+        return self._buf.value if self(f"status {alias} {what}") else ""
+
 
 class MatchAudio:
     """Plays a game's sound while the engine runs: start() before launching, stop() after."""
@@ -191,3 +195,86 @@ class MatchAudio:
             mci(f"setaudio music volume to {volume * k // steps}")
             threading.Event().wait(self.fade / steps)
         mci("stop music")
+
+
+class Playlist:
+    """Songs (music.Tracks, each played whole) one after another on this computer, round and round:
+    the design phases' music. play() starts it, or carries on where it paused, fading in; pause()
+    fades it out and keeps its place; close() ends it. Neither waits for the fade. Windows only, like
+    MatchAudio; elsewhere (or with no songs) it stays silent."""
+
+    ALIAS = "playlist"
+
+    def __init__(self, songs, level: float = 0.4, fade: float = 2.0, poll: float = 0.25, mci=None):
+        self.songs, self.level, self.fade, self.poll = list(songs), level, fade, poll
+        self._mci = mci  # for tests: something called like _MCI
+        self._want = "pause"
+        self._wake = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.now = 0  # the song playing (or paused), as an index into songs
+
+    def play(self) -> None:
+        self._set("play")
+
+    def pause(self) -> None:
+        self._set("pause")
+
+    def close(self) -> None:
+        self._set("close")
+        if self._thread:
+            self._thread.join(timeout=self.fade + 3)
+
+    def _set(self, want: str) -> None:
+        if not self.songs or (sys.platform != "win32" and self._mci is None):
+            return
+        self._want = want
+        if self._thread is None and want == "play":
+            self._thread = threading.Thread(target=self._run, daemon=True, name="playlist")
+            self._thread.start()
+        self._wake.set()
+
+    def _run(self) -> None:
+        try:
+            mci = self._mci or _MCI()
+        except (AttributeError, OSError):
+            return
+        a, opened, playing, failed = self.ALIAS, False, False, 0
+        volume = 0
+        try:
+            while (want := self._want) != "close":
+                if want == "play" and not opened:
+                    song = self.songs[self.now]
+                    opened = mci.open(song.file, a)
+                    if not opened:  # a missing or unplayable file: the next one (give up if none play)
+                        failed += 1
+                        if failed >= len(self.songs):
+                            return
+                        self.now = (self.now + 1) % len(self.songs)
+                        continue
+                    failed, volume = 0, int(1000 * min(1.0, self.level * song.volume))
+                if want == "play" and not playing:
+                    mci(f"setaudio {a} volume to 0")
+                    playing = mci(f"play {a}")
+                    self._ramp(mci, 0, volume)
+                elif want == "play" and mci.status(a, "mode") == "stopped":  # the song ended: the next
+                    mci(f"close {a}")
+                    opened = playing = False
+                    self.now = (self.now + 1) % len(self.songs)
+                    continue
+                elif want == "pause" and playing:
+                    self._ramp(mci, volume, 0)
+                    mci(f"pause {a}")
+                    playing = False
+                self._wake.wait(self.poll)
+                self._wake.clear()
+            if playing:
+                self._ramp(mci, volume, 0)
+        finally:
+            if opened:
+                mci(f"stop {a}")
+                mci(f"close {a}")
+
+    def _ramp(self, mci, start: int, end: int, steps: int = 20) -> None:
+        for k in range(1, steps + 1):
+            mci(f"setaudio {self.ALIAS} volume to {start + (end - start) * k // steps}")
+            threading.Event().wait(self.fade / steps)

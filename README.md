@@ -76,8 +76,14 @@ Tips:
     like the games: its own window, `--monitor` or `--full-screen`) until `/next`;
   - the champion gives a victory speech;
   - challenge and knockout games play their **sound** live (Windows): a starting beeper on the
-    countdown and the match music looping under the game from Go (the videos and highlights have it
-    either way).
+    countdown and the contest's music looping under the game from Go (the videos and highlights
+    have it either way);
+  - **design music** plays live while the models design: three chill songs one after another,
+    round and round, carrying on through their trials, practice games and presentations. It fades
+    out for a qualifying game (which has its contest's music) and for the knockout.
+
+  `--nomusic` turns off all the music, live and in the videos and highlights; the countdown beeps
+  stay (`[arena] music = false` in the config does the same).
 
   With it, `--speak` reads the announcer aloud, and `--announcer-style documentary` changes the host.
   For a natural British announcer, `pip install -e .[voice]` (Kokoro; its 340 MB model downloads on
@@ -406,7 +412,7 @@ plain text goes to both, and Enter plays on. Each game's result (scores, how it 
 finish time, falls) is printed. Every game starts with the game's own countdown, a big "3, 2, 1,
 Go!" over the arena (also in the video; `tools/run_contest.py --countdown` for a single game).
 Each game video has sound: a starting beeper (a beep on each count and a higher one on Go), then
-from Go the challenge's match music looping under the game and fading out as it ends; the
+from Go the contest's music looping under the game and fading out as it ends; the
 highlights reel keeps it. With `--showtime` the same sound also plays live on your speakers
 (Windows). `tools/run_contest.py --music synth_funk` for a single game; the beeps come with
 `--countdown`.
@@ -423,13 +429,19 @@ plays. The reel is made by ffmpeg alone, with no model calls and no tokens:
   over a second as the game ends (a game video without sound gets the music from its top); the
   cards are silent.
 
-The music is in [`Music/`](Music/tracks.toml): original 30 s instrumental clips made with Google's
-Lyria 3 through OpenRouter, so there are no copyright claims. Each track has loop points: whole
-4-bar phrases that stop before any fade at the end of the clip, so the loop is seamless. Which
-track plays:
-1. the challenge's own `music = "<track>"` (`challenges/*.toml`; `"none"` for silence);
-2. else the first track whose `tags` include the challenge's contest (e.g. `"zook sumo"`);
-3. else the track marked `default` (now `synth_funk`).
+The music is in [`Music/`](Music/tracks.toml): original instrumental tracks made with Google's
+Lyria 3 through OpenRouter, so there are no copyright claims. The game tracks are 30 s clips,
+three written for each contest; each has loop points, whole 4-bar phrases that stop before any fade
+at the end of the clip, so the loop is seamless. Which track plays under a game:
+1. the challenge's own `music = "<track>"` (`challenges/*.toml`; `"none"` for silence; unset in
+   the rules as shipped);
+2. else the contest's own track in the `[contests]` table of `tracks.toml` (Zook Sumo:
+   `sumo_wrestling_entrance`, Zookball: `marbles_jazz_funk_race`, ...); swap in any other track there;
+3. else the first track whose `tags` include the contest (e.g. `"zook sumo"`);
+4. else the track marked `default` (now `synth_funk`).
+
+The design music is the tracks tagged `"design"`, about three minutes each (Lyria 3 Pro), played
+whole in the order listed: Berlin-school analogue synths, dream pop, and lo-fi beats.
 
 `python tools/music.py list` shows each challenge's pick. To add a track, drop the MP3 in
 `Music/` and run `python tools/music.py analyse Music/<file>.mp3`, which prints its tempo, fade
@@ -555,8 +567,8 @@ src/bamzooki/
   announcer.py  the show's host (introductions, calls, interviews)
   showtime.py   model fact sheets, Zook cards, end-of-game stills, Hall of Fame, highlights
   voice.py      --speak: the announcer read aloud (Kokoro, or the system's speech engine)
-  music.py      match music (live and in the reel): tracks, loop points, the track for a challenge
-Music/          match music (Lyria 3 clips) and tracks.toml (loop points, tags, default)
+  music.py      the music (live, in the videos and the reel): tracks, loop points, each contest's track, the design songs
+Music/          the music (Lyria 3) and tracks.toml (loop points, tags, each contest's track, design songs)
 Model Instructions/  agent prompt, design guide, your manual copy (what models are told)
 challenges/     rules files: short.toml, full.toml (limits, scoring, hidden, qualifying, max_qualifiers)
 tools/          arena.py, run_contest.py, replay.py, challenge.py, extract.py, check_assets.py, spikes

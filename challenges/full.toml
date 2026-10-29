@@ -11,7 +11,8 @@
 
 name = "full"
 title = "The full BAMZOOKi challenge"
-music = "synth_funk"                     # the highlights reel's track (Music/tracks.toml; "none" = silent)
+# music = "synth_funk"                   # one track for every game ("none" = silent); unset, each contest
+                                         #   plays its own ([contests] in Music/tracks.toml)
 hidden = true                            # the rounds' contests are kept from the models (bamzooki.toml can override)
 qualifying = "none"                      # no qualifying games (they're for short rules)
 max_qualifiers = 8                       # the first 8 to put their Zooks forward make the knockout; "" = no limit

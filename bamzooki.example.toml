@@ -69,6 +69,8 @@
 # presentation_words = 120                  # with showtime: the length the models are asked to keep their
 #                                           # presentation to (a longer one is still read in full)
 # commentator = "google/gemini-3.5-flash-lite"  # live commentary on the knockout games (off unless set)
+# music = false                             # --nomusic: no music, live or in the videos (the beeps stay);
+#                                           # with showtime the design songs play live while models design
 #
 # [arena.voices]                            # --speak: the contestants' own voices, by lab or full model id
 # google = "af_heart"                       # Gemini: American female

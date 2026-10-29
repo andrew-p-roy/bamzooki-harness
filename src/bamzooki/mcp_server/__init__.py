@@ -251,6 +251,7 @@ def main(argv: list[str] | None = None) -> None:
                     help="test games and the challenge game run in 4:3 full screen, scaled up to fill the display")
     ap.add_argument("--live-sound", action="store_true",
                     help="the challenge game's countdown beeps and music also play live (its video has them anyway)")
+    ap.add_argument("--no-music", action="store_true", help="the challenge game without music (the beeps stay)")
     a = ap.parse_args(argv)
     view_fit = (float(a.view_fit.split(",")[0]), int(a.view_fit.split(",")[1])) if a.view_fit else None
     from ..challenge import Session, plan_from_config
@@ -262,7 +263,7 @@ def main(argv: list[str] | None = None) -> None:
     elif not a.no_challenge:
         session = plan_from_config(load_config(), a.challenge)
     server = build_server(Studio(model=a.model, session=session, position=a.position, view_fit=view_fit,
-                                 fullscreen=a.full_screen, live_sound=a.live_sound))
+                                 fullscreen=a.full_screen, live_sound=a.live_sound, music=not a.no_music))
     if a.http:
         server.run("streamable-http", host=a.host, port=a.port)
     else:
