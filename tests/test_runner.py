@@ -320,3 +320,18 @@ def test_half_rect_fills_the_half_with_the_visible_frame(work, right, rect):
     assert (x, y, w, h) == rect
     assert x + 7 == (work[2] - (work[2] - work[0]) // 2 if right else work[0])  # visible left edge
     assert y + h - 7 == work[3]  # visible bottom = the work area's
+
+
+def test_full_screen_is_a_borderless_window_with_a_4_3_picture(monkeypatch):
+    from bamzooki import runner
+
+    monkeypatch.setattr(runner._win, "screen_size", lambda: (1920, 1080))
+    # windowed full screen: the window covers the screen, the picture is 4:3 at most 1024x768
+    assert runner._windowing((800, 600), "right-half", None, True) == ((1920, 1080), (1920, 1080), "screen",
+                                                                        (4 / 3, 1024))
+    monkeypatch.setattr(runner._win, "screen_size", lambda: (1024, 600))  # a small screen: its full height
+    assert runner._windowing(None, "none", None, True)[3] == (4 / 3, 800)
+    # otherwise as asked
+    assert runner._windowing(None, "none", None, False) == (runner.DEFAULT_CLIENT, None, "none", None)
+    assert runner._windowing((944, 708), "right-half", (4 / 3, 944), False) == ((944, 708), (944, 708), "right-half",
+                                                                                (4 / 3, 944))

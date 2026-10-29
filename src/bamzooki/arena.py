@@ -4,7 +4,7 @@
     python tools/arena.py --challenger openai/gpt-5 --challenger anthropic/claude-sonnet-4.5
     python tools/arena.py --challenge challenges/short.toml
     python tools/arena.py --monitor                        # one screen: test/tournament games on the right
-    python tools/arena.py --full-screen                    # test/tournament games in 4:3 full screen
+    python tools/arena.py --full-screen                    # test/tournament games in windowed full screen
 
 For each challenger the runner starts the bamzooki MCP server (stdio) with the challenger's full
 model name, working in the arena folder (outside the repo), and runs an agent loop over
@@ -313,8 +313,9 @@ class Arena:
         self.cfg = load_config()
         # --monitor: test and tournament games put the engine window on the right half of the main
         # screen with a 4:3 picture (at most 1080p's half) in it, leaving the left for this terminal.
-        # --full-screen: they run in 4:3 full screen instead, scaled up to fill the display. Either
-        # way, other games (and, without them, every game) stay in the engine's own window.
+        # --full-screen: they run in windowed full screen instead (a borderless window over the whole
+        # screen, a 4:3 picture of at most 1024x768 centred in it). Either way, other games (and,
+        # without them, every game) stay in the engine's own window.
         from .runner import MONITOR_VIEW
 
         self.position = "right-half" if monitor else "none"
@@ -1985,8 +1986,9 @@ def main(argv: list[str] | None = None) -> None:
                              "of the main screen, with a 4:3 picture (at most 1080p's half) in it, leaving the left "
                              "for this terminal ([arena] monitor)")
     screen.add_argument("--full-screen", action="store_true", default=bool(a_cfg.get("full_screen", False)),
-                        help="test and tournament games run in 4:3 full screen, scaled up to fill the display "
-                             "([arena] full_screen). Default: the engine's own window, where it opens")
+                        help="test and tournament games run in windowed full screen: a borderless window over the "
+                             "whole screen, with a 4:3 picture (at most 1024x768) centred in it ([arena] "
+                             "full_screen). Default: the engine's own window, where it opens")
     a = ap.parse_args(argv)
     if a.full_screen:
         a.monitor = False  # e.g. [arena] monitor = true in the config, --full-screen on the command line

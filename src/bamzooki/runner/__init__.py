@@ -47,9 +47,22 @@ DEFAULT_CLIENT = (884, 662)
 # half). Frame capture slows the engine in proportion to the view's pixels, and a slower engine plays
 # less of each game before the real-time limit.
 MONITOR_VIEW = (4 / 3, 944)
-# Full-screen mode's display mode (Job.fullscreen): 4:3, which the graphics card or monitor scales up
-# to fill the screen; about as many pixels as MONITOR_VIEW, so about the same speed.
-FULL_SCREEN_MODE = (1024, 768)
+# Full-screen mode's picture (Job.fullscreen, windowed full screen): 4:3, centred in a borderless
+# window over the whole primary screen, at most 1024x768. Capture cost grows with the picture's
+# pixels: 1024x768 runs at about 0.77x real time, a 1080p screen's full height (1440x1080) at 0.3x.
+FULL_SCREEN_VIEW = (4 / 3, 1024)
+
+
+def _windowing(window: tuple[int, int] | None, position: str, view_fit: tuple[float, int] | None,
+               fullscreen: bool) -> tuple[tuple[int, int], tuple[int, int] | None, str, tuple[float, int] | None]:
+    """(client size, size to give the window, position, view_fit) for a run. Full screen is windowed
+    full screen: a borderless window covering the primary screen (position "screen"), the picture
+    4:3 in it (FULL_SCREEN_VIEW, unless view_fit says otherwise)."""
+    if fullscreen:
+        screen = _win.screen_size()
+        fit = view_fit or (FULL_SCREEN_VIEW[0], min(FULL_SCREEN_VIEW[1], round(screen[1] * FULL_SCREEN_VIEW[0])))
+        return screen, screen, "screen", fit
+    return window or DEFAULT_CLIENT, window, position, view_fit
 
 
 
@@ -98,7 +111,7 @@ class Job:
     position: str = "none"
     # (aspect, max width): keep the camera view (and video) at that aspect, centred in the window
     view_fit: tuple[float, int] | None = None
-    fullscreen: bool = False  # exclusive full screen at FULL_SCREEN_MODE (ignores window and position)
+    fullscreen: bool = False  # windowed full screen, the picture 4:3 (ignores window and position)
     config: dict = field(default_factory=dict)  # extra Config.Set values
     track_interval: float = 0.5
     model: str | None = None  # who designed/operates this run; renders go to <render_dir>/<model>/
@@ -188,15 +201,15 @@ class Engine:
             dst.write_bytes(script.encode(src, self.install.script_key.public_key()))
             stamp.write_bytes(src)
 
-    def write_video_cfg(self, size: tuple[int, int] | None, fullscreen: bool = False) -> None:
-        # Windowed mode ignores the size here (the runner resizes the window itself when asked);
-        # the file mainly keeps the engine out of the user's fullscreen Video.cfg. Full screen
-        # switches the display to FULL_SCREEN_MODE.
+    def write_video_cfg(self, size: tuple[int, int] | None) -> None:
+        # Always windowed (full screen is a borderless window over the screen). Windowed mode ignores
+        # the size here (the runner resizes the window itself when asked); the file mainly keeps the
+        # engine out of the user's fullscreen Video.cfg.
         if not self.install.save_dir:
             return
-        size = FULL_SCREEN_MODE if fullscreen else size or DEFAULT_CLIENT
+        size = size or DEFAULT_CLIENT
         cfg = {"bit_depth": 1, "quality": 1, "resolution_x": size[0],
-               "resolution_y": size[1], "shadow_quality": 1, "windowed": 0 if fullscreen else 1}
+               "resolution_y": size[1], "shadow_quality": 1, "windowed": 1}
         (self.install.save_dir / VIDEO_CFG).write_text(table.dumps(cfg), encoding="latin-1")
 
     def sandbox_zook(self, rel: str) -> Path:
@@ -207,8 +220,8 @@ class Engine:
         """Run one contest. focus: "launch" (focus once), "idle" (also re-take focus when the
         user has been idle 3 s), "always" (re-take whenever lost)."""
         self.prepare()
-        self.write_video_cfg(job.window, job.fullscreen)
-        client = FULL_SCREEN_MODE if job.fullscreen else job.window or DEFAULT_CLIENT
+        client, window, position, view_fit = _windowing(job.window, job.position, job.view_fit, job.fullscreen)
+        self.write_video_cfg(client)
         started = datetime.now()
         stamp = started.strftime("%Y%m%d-%H%M%S")
         run_dir = self.runs / f"{stamp}-{name or job.contest.contest_file}"
@@ -237,8 +250,7 @@ class Engine:
             "view": view_spec(job.view),
             "window_w": client[0],
             "window_h": client[1],
-            "view_fit": _fit_spec(job.view_fit),
-            "fullscreen": 1 if job.fullscreen else 0,
+            "view_fit": _fit_spec(view_fit),
             "curtain": 1,  # black until the cameras exist (HarnessCurtain)
             "capture": 1 if job.video else 0,
             "capture_dir": _posix(frames_dir),
@@ -275,8 +287,7 @@ class Engine:
         if job.commentary:
             job.commentary.start(run_dir)
         try:
-            status, error, wall = self._launch(args, timeout, focus, None if job.fullscreen else job.window,
-                                               "none" if job.fullscreen else job.position, after_go)
+            status, error, wall = self._launch(args, timeout, focus, window, position, after_go)
         finally:
             sound.stop()
             if job.commentary:
@@ -396,10 +407,8 @@ class Engine:
             raise KeyError(f"unknown trial {trial!r}; trials: {', '.join(TRIALS)}, or free:<Env> "
                            f"({', '.join(self.environments())})")
         self.prepare()
-        self.write_video_cfg(window, fullscreen)
-        client = FULL_SCREEN_MODE if fullscreen else window or DEFAULT_CLIENT
-        if fullscreen:
-            window, position = None, "none"
+        client, window, position, view_fit = _windowing(window, position, view_fit, fullscreen)
+        self.write_video_cfg(client)
         started = datetime.now()
         run_dir = self.runs / f"{started.strftime('%Y%m%d-%H%M%S')}-trial-{trial.replace(':', '-')}"
         frames_dir = run_dir / "frames"
@@ -411,7 +420,7 @@ class Engine:
             "go_time": go_time, "max_time": limit + (5.0 if is_trial else 0.0),
             "texture_dir": _posix(self.root / "NewTeam" / "Textures"),
             "view": view_spec(view), "window_w": client[0], "window_h": client[1],
-            "view_fit": _fit_spec(view_fit), "fullscreen": 1 if fullscreen else 0, "curtain": 1,
+            "view_fit": _fit_spec(view_fit), "curtain": 1,
             "capture": 1 if video else 0, "capture_dir": _posix(frames_dir), "capture_fps": fps,
             "update_interval": 0.1, "track_interval": 0.5,
             "window_title": f"BAMZOOKi harness - trial {trial} - {name}",
@@ -456,13 +465,13 @@ class Engine:
         second) like a turntable, until `cancel` is set (or max_time real seconds). Windowing as in
         Job. Returns how it ended ("stopped", "exited", ...)."""
         self.prepare()
-        self.write_video_cfg(window, fullscreen)
-        client = FULL_SCREEN_MODE if fullscreen else window or DEFAULT_CLIENT
+        client, window, position, view_fit = _windowing(window, position, view_fit, fullscreen)
+        self.write_video_cfg(client)
         run_dir = self.runs / f"{time.strftime('%Y%m%d-%H%M%S')}-showcase"
         run_dir.mkdir(parents=True, exist_ok=True)
         spec = {
             "driver": "HarnessShowcase", "classes": {1: "HarnessShowcase", 2: "HarnessCurtain"}, "camera": 3,
-            "curtain": 1, "fullscreen": 1 if fullscreen else 0,
+            "curtain": 1,
             "zook": _posix(zook), "name": name, "env": env, "texture_dir": _posix(self.root / "NewTeam" / "Textures"),
             "window_w": client[0], "window_h": client[1], "view_fit": _fit_spec(view_fit),
             "orbit": orbit, "angle": 35, "max_time": max_time,
@@ -472,8 +481,7 @@ class Engine:
         (run_dir / "job.dat").write_text(table.dumps(spec), encoding="latin-1")
         args = ["-init", BOOT_NAME, "-videocfg", VIDEO_CFG,
                 "-script", _posix(LUA_DIR / "boot.lua"), "-job", _posix(run_dir / "job.dat")]
-        status, _, _ = self._launch(args, max_time + 60, "idle", None if fullscreen else window,
-                                    "none" if fullscreen else position, cancel=cancel)
+        status, _, _ = self._launch(args, max_time + 60, "idle", window, position, cancel=cancel)
         return status
 
     def selection(self, contest: str, zooks: list[tuple[Path, str]], cancel: threading.Event, title: str = "",
@@ -484,13 +492,13 @@ class Engine:
         above and `caption` below, until `cancel` is set (or max_time real seconds). Windowing as in
         Job. Returns how it ended ("stopped", "exited", ...)."""
         self.prepare()
-        self.write_video_cfg(window, fullscreen)
-        client = FULL_SCREEN_MODE if fullscreen else window or DEFAULT_CLIENT
+        client, window, position, _ = _windowing(window, position, None, fullscreen)  # a menu: the whole window
+        self.write_video_cfg(client)
         run_dir = self.runs / f"{time.strftime('%Y%m%d-%H%M%S')}-selection"
         run_dir.mkdir(parents=True, exist_ok=True)
         spec = {
             "driver": "HarnessSelection", "classes": {1: "HarnessSelection", 2: "HarnessCurtain"}, "camera": 3,
-            "curtain": 1, "fullscreen": 1 if fullscreen else 0, "window_w": client[0], "window_h": client[1],
+            "curtain": 1, "window_w": client[0], "window_h": client[1],
             "title": title or contest, "contest": contest, "caption": caption or None,
             "zooks": {i + 1: {"path": _posix(p), "label": label} for i, (p, label) in enumerate(zooks)},
             "max_time": max_time, "window_title": f"BAMZOOKi harness - {contest}",
@@ -499,8 +507,7 @@ class Engine:
         (run_dir / "job.dat").write_text(table.dumps(spec), encoding="latin-1")
         args = ["-init", BOOT_NAME, "-videocfg", VIDEO_CFG,
                 "-script", _posix(LUA_DIR / "boot.lua"), "-job", _posix(run_dir / "job.dat")]
-        status, _, _ = self._launch(args, max_time + 60, "idle", None if fullscreen else window,
-                                    "none" if fullscreen else position, cancel=cancel)
+        status, _, _ = self._launch(args, max_time + 60, "idle", window, position, cancel=cancel)
         return status
 
     # --- replays -------------------------------------------------------------------

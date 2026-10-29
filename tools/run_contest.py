@@ -53,7 +53,7 @@ def main() -> int:
                     default="none")
     ap.add_argument("--monitor", action="store_true",
                     help="one screen, as the arena's --monitor: the window on the right half, a 4:3 picture in it")
-    ap.add_argument("--full-screen", action="store_true", help="4:3 full screen, scaled up to fill the display")
+    ap.add_argument("--full-screen", action="store_true", help="windowed full screen: a borderless window over the screen, the picture 4:3")
     ap.add_argument("--raw-overrides", action="store_true", help="disable the default behaviour fixes")
     ap.add_argument("--focus", choices=["launch", "idle", "always"], default="idle")
     ap.add_argument("--music", metavar="TRACK", help="loop a track from Music/tracks.toml under the game from Go")

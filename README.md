@@ -330,7 +330,7 @@ python tools/arena.py --challenger anthropic/claude-sonnet-4.5 --challenger open
 python tools/arena.py --challenge challenges/short.toml           # quick 3-run sessions
 python tools/arena.py --auto --showtime --speak                  # the whole show, unattended
 python tools/arena.py --monitor                                   # one screen: games on the right
-python tools/arena.py --full-screen                               # games in 4:3 full screen
+python tools/arena.py --full-screen                               # games in windowed full screen
 ```
 
 **Unattended (`--auto`).** The whole show runs start to finish with no `/next` or Enter: every
@@ -338,12 +338,13 @@ queued challenger in turn (each presentation, and its turntable, plays out befor
 the knockout if two qualify (every game in a row, Hall of Fame yes), the champion's speech and
 the session table. With `--speak` it waits for the voice before moving on, so nothing is cut off.
 
-**Full screen (`--full-screen`).** Test, challenge and tournament games switch the display to 1024×768 (4:3)
-and run full screen; your graphics card or monitor scales that up to fill the screen, whatever its
-resolution. Whether the sides get black bars or the picture is stretched is the scaling setting in
-your graphics driver ("maintain aspect ratio" for bars). It runs at about the same speed as
-`--monitor` (0.79× real time) and videos are 1024×768. The terminal is hidden while a game plays,
-and switching to it pauses the game. Without `--monitor` or `--full-screen`, every game uses the
+**Full screen (`--full-screen`).** Test, challenge and tournament games, the turntable and the
+selection screen run in windowed full screen: a borderless window covering the whole main screen,
+taskbar included. The display mode never changes, so switching windows is quick and safe. The game's
+picture is 4:3, at most 1024×768, centred on black. Capture slows the engine in proportion to the
+picture's pixels: 1024×768 runs at about 0.77× real time (as fast as `--monitor`), while filling a 1080p screen's height
+(1440×1080) ran at 0.3×, and games stop at a real-time limit. Videos are 1024×768. The terminal is
+hidden while a game plays, and switching to it pauses the game. Without `--monitor` or `--full-screen`, every game uses the
 engine's own window, where it opens. In every mode the window is black while a game loads (after
 a moment of white while the engine itself starts).
 
@@ -517,7 +518,7 @@ qwen = "bf_emma"      # Qwen: British female
 openai = "am_puck"    # GPT / Luna: American male
 anthropic = "am_michael"  # Claude: American male
 monitor = true       # one screen: test and tournament games on the right
-# full_screen = true # or: test and tournament games in 4:3 full screen
+# full_screen = true # or: test and tournament games in windowed full screen
 ```
 
 **While a game is playing, leave the engine window in front** and don't close it. The game only

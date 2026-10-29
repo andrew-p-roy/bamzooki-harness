@@ -248,7 +248,8 @@ def main(argv: list[str] | None = None) -> None:
                     help="test games keep the picture at this aspect and width cap, centred in the window "
                          "(e.g. 1.3333,944; default: the picture fills the window)")
     ap.add_argument("--full-screen", action="store_true",
-                    help="test games and the challenge game run in 4:3 full screen, scaled up to fill the display")
+                    help="test games and the challenge game run in windowed full screen (a borderless window over "
+                         "the screen, the picture 4:3)")
     ap.add_argument("--live-sound", action="store_true",
                     help="the challenge game's countdown beeps and music also play live (its video has them anyway)")
     ap.add_argument("--no-music", action="store_true", help="the challenge game without music (the beeps stay)")

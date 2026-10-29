@@ -13,11 +13,8 @@ function BootLog(msg)
 	String.WriteFile(JOB.boot_log, BOOT_LOG)
 end
 BootLog("boot: job " .. jobPath)
--- Windowed unless the job asks for full screen (the .vcfg then has windowed = 0 and a 4:3 mode).
+-- Always windowed: the runner's full screen is a borderless window over the screen.
 EXCLUSIVE = 0
-if JOB.fullscreen == 1 then
-	EXCLUSIVE = 1
-end
 
 if JOB.profile == "player" then
 	-- Same configuration sequence as the game's Motion Player boot script, but windowed.

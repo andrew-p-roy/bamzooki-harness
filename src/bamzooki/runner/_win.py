@@ -68,13 +68,29 @@ def client_size(hwnd: int) -> tuple[int, int]:
     return cli.right - cli.left, cli.bottom - cli.top
 
 
+def screen_size() -> tuple[int, int]:
+    """The primary monitor's size (what a "screen" window's client area becomes)."""
+    if not IS_WINDOWS:
+        return (1024, 768)
+    return _user32.GetSystemMetrics(0), _user32.GetSystemMetrics(1)  # SM_CXSCREEN, SM_CYSCREEN
+
+
 def place_window(hwnd: int, width: int, height: int, position: str = "right", wait: bool = True) -> None:
     """Give a window a client (drawable) area of width x height and dock it in the primary
     monitor's work area: "right" (top-right, leaving the left free for e.g. a terminal),
     "left", "center", or "none" (keep where Windows put it). "right-half" / "left-half" ignore
-    width x height and make the window's visible frame fill that half of the work area. wait=False
-    only posts the change to the window's thread (applied when it next handles messages)."""
+    width x height and make the window's visible frame fill that half of the work area. "screen"
+    ignores them too: windowed full screen, the window loses its frame and covers the whole
+    primary monitor, taskbar included. wait=False only posts the change to the window's thread
+    (applied when it next handles messages)."""
     if not IS_WINDOWS:
+        return
+    if position == "screen":
+        style = _user32.GetWindowLongW(hwnd, -16)  # GWL_STYLE
+        # no caption, frame or system menu: a popup window (WS_POPUP), still visible
+        _user32.SetWindowLongW(hwnd, -16, ctypes.c_long((style & ~0x00CF0000) | 0x80000000).value)
+        flags = 0x20 | 0x10 | (0 if wait else 0x4000)  # SWP_FRAMECHANGED | SWP_NOACTIVATE (| SWP_ASYNCWINDOWPOS)
+        _user32.SetWindowPos(hwnd, 0, 0, 0, *screen_size(), flags)  # HWND_TOP
         return
     win, cli, work = wintypes.RECT(), wintypes.RECT(), wintypes.RECT()
     _user32.GetWindowRect(hwnd, ctypes.byref(win))
