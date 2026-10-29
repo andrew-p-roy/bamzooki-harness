@@ -19,6 +19,9 @@ dependencies = [
 voice = [
     "kokoro-onnx>=0.6",  # --speak: natural announcer voice (model downloaded on first use)
 ]
+obs = [
+    "obsws-python>=1.7",  # --obs: the arena switches OBS scenes and records (obs-websocket 5)
+]
 dev = [
     "pytest>=8",
     "pre-commit>=3",
@@ -28,7 +31,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-bamzooki = ["runner/lua/*.lua"]
+bamzooki = ["runner/lua/*.lua", "web/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

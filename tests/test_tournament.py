@@ -120,6 +120,19 @@ def test_byes_only_in_the_first_round_for_the_best_seeds():
     assert sum(b.how == "bye" for b in rounds[0]) == 2
 
 
+def test_each_rounds_draw_is_told_before_it_starts():
+    field = seats(6)
+    draws, order = [], []
+    rounds, _ = knockout(field, strongest, quiet, random.Random(5), seeded=True,
+                         on_draw=lambda i, name, d: (draws.append((i, name, d)), order.append("draw")),
+                         start_round=lambda i, t, name, f: order.append("start"))
+    assert order == ["draw", "start"] * 3
+    assert [(i, name) for i, name, _ in draws] == [(0, "Quarter-finals"), (1, "Semi-finals"), (2, "Final")]
+    first = draws[0][2]
+    assert [b is None for _, b in first].count(True) == 2 and len(first) == 4  # 2 byes beside 2 matches
+    assert [[(b.a.model, b.b and b.b.model) for b in r] for r in rounds] ==         [[(a.model, b and b.model) for a, b in d] for _, _, d in draws]  # the bouts follow the draw
+
+
 def test_a_side_without_a_zook_forfeits():
     field = seats(4)
     played, before = [], []

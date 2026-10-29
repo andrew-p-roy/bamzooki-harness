@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920, height=1080">
+<title>BAMZOOKi Arena overlay</title>
+<!-- The arena's broadcast overlay (bamzooki/overlay.py): an OBS Browser Source, 1920x1080, transparent.
+     The state arrives over /events; nothing is loaded from outside, so it works offline. -->
+<style>
+  :root {
+    --ink: #e8f4ff;
+    --ink-dim: #8fb3d1;
+    --ink-faint: #4d6f8c;
+    --panel: rgba(6, 18, 34, 0.86);
+    --panel-edge: rgba(70, 170, 255, 0.55);
+    --trace: rgba(70, 170, 255, 0.10);
+    --accent: #3fb6ff;
+    --accent-hot: #8fe3ff;
+    --win: #5cf2c7;
+    --gold: #ffd36b;
+    --green-side: #38d27a;
+    --red-side: #ff5a5f;
+    --glow: 0 0 18px rgba(63, 182, 255, 0.45);
+    --font: "Bahnschrift", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: transparent; }
+  body { font-family: var(--font); color: var(--ink); -webkit-font-smoothing: antialiased; }
+  /* ?preview: a stand-in for the game behind the overlay, to look at it in a browser */
+  body.preview { background: radial-gradient(ellipse at 50% 60%, #2a4a3a 0%, #13241d 55%, #070d0b 100%); }
+
+  /* panels: dark glass with a faint circuit trace and a lit edge */
+  .panel {
+    position: absolute;
+    background-color: var(--panel);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' fill='none' stroke='%2346aaff' stroke-opacity='0.13' stroke-width='1.2'%3E%3Cpath d='M0 40h40l20 20h50l10-10h40M30 160v-40l20-20h30M110 0v30l15 15v35M160 110h-35l-15 15v35M0 120h20'/%3E%3Ccircle cx='60' cy='60' r='3'/%3E%3Ccircle cx='120' cy='50' r='3'/%3E%3Ccircle cx='80' cy='100' r='3'/%3E%3Ccircle cx='125' cy='80' r='3'/%3E%3Ccircle cx='20' cy='120' r='3'/%3E%3C/svg%3E");
+    border: 1px solid var(--panel-edge);
+    border-radius: 10px;
+    box-shadow: var(--glow), inset 0 0 40px rgba(0, 0, 0, 0.35);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .hidden { opacity: 0; pointer-events: none; }
+  .label { font-size: 15px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-dim); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* top-left bug: the challenge */
+  #bug { left: 40px; top: 36px; padding: 14px 22px 14px 18px; display: flex; gap: 14px; align-items: center; }
+  #bug .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent);
+              animation: pulse 2.4s ease-in-out infinite; }
+  #bug .title { font-size: 26px; font-weight: 600; }
+  #bug .sub { font-size: 16px; color: var(--ink-dim); margin-top: 2px; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+
+  /* bottom ticker: the challenger at work */
+  #ticker { left: 40px; right: 40px; bottom: 36px; height: 128px; display: grid;
+            grid-template-columns: 470px 1fr 300px; align-items: stretch; overflow: hidden; }
+  #ticker > div { padding: 18px 24px; }
+  #ticker .who { border-right: 1px solid var(--panel-edge); display: flex; flex-direction: column; justify-content: center; }
+  #ticker .model { font-size: 30px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #ticker .maker { font-size: 17px; color: var(--ink-dim); margin-top: 4px; }
+  #ticker .mid { display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
+  #ticker .budgets { display: flex; gap: 40px; align-items: center; }
+  .budget { display: flex; align-items: center; gap: 12px; }
+  .pips { display: flex; gap: 5px; flex-wrap: nowrap; }
+  .pip { width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--accent); background: var(--accent);
+         box-shadow: 0 0 6px rgba(63, 182, 255, 0.6); transition: background 0.4s, box-shadow 0.4s; }
+  .pip.used { background: transparent; box-shadow: none; border-color: var(--ink-faint); }
+  .count { font-size: 22px; font-weight: 600; }
+  #last { font-size: 21px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--accent-hot); }
+  #last.fresh { animation: slidein 0.6s ease-out; }
+  @keyframes slidein { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+  #chips { display: flex; gap: 8px; margin-left: auto; }
+  .chip { font-size: 15px; padding: 3px 10px; border-radius: 12px; border: 1px solid var(--win); color: var(--win); }
+  #ticker .meter { border-left: 1px solid var(--panel-edge); display: flex; flex-direction: column; justify-content: center;
+                   align-items: flex-end; gap: 6px; }
+  #cost { font-size: 40px; font-weight: 700; color: var(--ink); }
+  #tokens { font-size: 18px; color: var(--ink-dim); }
+
+  /* the score bug: a game being played */
+  #score { left: 50%; top: 48px; transform: translateX(-50%); padding: 10px 0; display: grid;
+           grid-template-columns: minmax(300px, auto) 120px minmax(300px, auto); align-items: center; }
+  #score .side { display: flex; flex-direction: column; padding: 0 26px; }
+  #score .side.green { align-items: flex-end; text-align: right; border-right: 4px solid var(--green-side); }
+  #score .side.red { align-items: flex-start; border-left: 4px solid var(--red-side); }
+  #score .zook { font-size: 30px; font-weight: 700; }
+  #score .of { font-size: 16px; color: var(--ink-dim); }
+  #score .mid { text-align: center; }
+  #score .v { font-size: 22px; color: var(--ink-dim); }
+  #score .game { font-size: 14px; color: var(--accent-hot); letter-spacing: 0.15em; }
+  #score-head { position: absolute; left: 0; right: 0; top: -26px; text-align: center; }
+  #score-head span { background: var(--panel); border: 1px solid var(--panel-edge); border-bottom: 0;
+                     border-radius: 8px 8px 0 0; padding: 4px 18px; font-size: 15px; letter-spacing: 0.15em;
+                     text-transform: uppercase; color: var(--ink-dim); }
+
+  /* the knockout bracket */
+  #bracket { left: 160px; right: 160px; top: 110px; bottom: 110px; padding: 28px 36px 30px; display: flex; flex-direction: column; }
+  #bracket h1 { font-size: 34px; font-weight: 600; letter-spacing: 0.04em; }
+  #bracket h1 small { font-size: 18px; color: var(--ink-dim); font-weight: 400; margin-left: 14px; letter-spacing: 0.12em;
+                      text-transform: uppercase; }
+  #cols { flex: 1; display: flex; gap: 34px; margin-top: 22px; min-height: 0; }
+  .col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .col .head { text-align: center; margin-bottom: 12px; }
+  .col .head .name { font-size: 20px; font-weight: 600; }
+  .col .head .contest { font-size: 15px; color: var(--accent-hot); min-height: 19px; }
+  .col .slots { flex: 1; display: flex; flex-direction: column; justify-content: space-around; gap: 10px; }
+  .match { border: 1px solid var(--ink-faint); border-radius: 8px; background: rgba(4, 12, 24, 0.75); overflow: hidden;
+           transition: border-color 0.5s, box-shadow 0.5s; }
+  .match.now { border-color: var(--accent-hot); box-shadow: 0 0 22px rgba(143, 227, 255, 0.55); }
+  .row { display: flex; align-items: center; gap: 10px; padding: 7px 12px; min-height: 44px; transition: opacity 0.5s; }
+  .row + .row { border-top: 1px solid rgba(77, 111, 140, 0.5); }
+  .row .names { flex: 1; min-width: 0; }
+  .row .z { font-size: 19px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .m { font-size: 13px; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row.win .z { color: var(--win); }
+  .row.win { background: linear-gradient(90deg, rgba(92, 242, 199, 0.16), transparent); }
+  .row.lose { opacity: 0.38; }
+  .row.empty .z { color: var(--ink-faint); font-weight: 400; }
+  .row .games { display: flex; gap: 4px; }
+  .g { width: 10px; height: 10px; border-radius: 50%; border: 1px solid var(--ink-faint); }
+  .g.won { background: var(--win); border-color: var(--win); }
+  .tag { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); }
+  .col.champ .slots { justify-content: center; }
+  .crown { text-align: center; border: 1px solid var(--ink-faint); border-radius: 10px; padding: 22px 12px;
+           background: rgba(4, 12, 24, 0.75); transition: border-color 0.6s, box-shadow 0.6s; }
+  .crown .z { font-size: 26px; font-weight: 700; }
+  .crown .m { font-size: 15px; color: var(--ink-dim); margin-top: 4px; }
+  .crown.won { border-color: var(--gold); box-shadow: 0 0 34px rgba(255, 211, 107, 0.55); }
+  .crown.won .z { color: var(--gold); }
+  .crown svg { width: 46px; height: 34px; margin-bottom: 8px; }
+  body[data-phase="crown"] #bracket { box-shadow: 0 0 40px rgba(255, 211, 107, 0.35), inset 0 0 40px rgba(0, 0, 0, 0.35); }
+</style>
+</head>
+<body data-phase="idle">
+  <div id="bug" class="panel hidden"><div class="dot"></div><div><div class="title" id="ch-title"></div><div class="sub" id="ch-sub"></div></div></div>
+
+  <div id="ticker" class="panel hidden">
+    <div class="who"><div class="label">Challenger</div><div class="model" id="t-model"></div><div class="maker" id="t-maker"></div></div>
+    <div class="mid">
+      <div class="budgets">
+        <div class="budget"><span class="label">Runs</span><div class="pips" id="p-runs"></div><span class="count num" id="c-runs"></span></div>
+        <div class="budget"><span class="label">Trials</span><div class="pips" id="p-trials"></div><span class="count num" id="c-trials"></span></div>
+        <div id="chips"></div>
+      </div>
+      <div id="last"></div>
+    </div>
+    <div class="meter"><div class="label">Spend</div><div id="cost" class="num">$0.0000</div><div id="tokens" class="num">0 tokens</div></div>
+  </div>
+
+  <div id="score" class="panel hidden">
+    <div id="score-head"><span id="s-head"></span></div>
+    <div class="side green"><div class="zook" id="s-gz"></div><div class="of" id="s-gm"></div></div>
+    <div class="mid"><div class="v">v</div><div class="game" id="s-game"></div></div>
+    <div class="side red"><div class="zook" id="s-rz"></div><div class="of" id="s-rm"></div></div>
+  </div>
+
+  <div id="bracket" class="panel hidden"><h1 id="b-title"></h1><div id="cols"></div></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const MAX_PIPS = 20;  // beyond this the count alone says it
+let state = null, lastText = "", shownCost = 0, targetCost = 0;
+
+function h(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text !== undefined && text !== null) el.textContent = text;
+  return el;
+}
+const shortModel = (m) => (m || "").split("/").pop();
+
+function pips(el, used, left) {
+  el.replaceChildren();
+  if (typeof left !== "number") return;
+  const total = used + left;
+  if (total > MAX_PIPS) return;
+  for (let i = 0; i < total; i++) el.append(h("div", "pip" + (i < used ? " used" : "")));
+}
+function count(used, left) {
+  if (left === undefined || left === null) return "";
+  return typeof left === "number" ? `${left} left` : String(left);
+}
+
+function drawTicker(c) {
+  $("t-model").textContent = c.model || "";
+  $("t-maker").textContent = [c.maker, c.country].filter(Boolean).join(" · ");
+  pips($("p-runs"), c.runs_used || 0, c.runs_left);
+  pips($("p-trials"), c.trials_used || 0, c.trials_left);
+  $("c-runs").textContent = count(c.runs_used, c.runs_left);
+  $("c-trials").textContent = count(c.trials_used, c.trials_left);
+  const chips = $("chips");
+  chips.replaceChildren(...(c.submitted || []).map((z) => h("span", "chip", z)));
+  if ((c.last || "") !== lastText) {
+    lastText = c.last || "";
+    const el = $("last");
+    el.textContent = lastText;
+    el.classList.remove("fresh"); void el.offsetWidth; el.classList.add("fresh");
+  }
+  targetCost = Number(c.cost || 0);
+  $("tokens").textContent = `${Number(c.tokens || 0).toLocaleString("en-GB")} tokens`;
+}
+
+function tickCost() {  // the spend counts up smoothly
+  shownCost += (targetCost - shownCost) * 0.08;
+  if (Math.abs(targetCost - shownCost) < 0.00005) shownCost = targetCost;
+  $("cost").textContent = "$" + shownCost.toFixed(4);
+  requestAnimationFrame(tickCost);
+}
+
+function drawScore(m) {
+  $("s-head").textContent = [m.round, m.contest].filter(Boolean).join(" · ");
+  $("s-gz").textContent = (m.green || {}).zook || "";
+  $("s-gm").textContent = shortModel((m.green || {}).model);
+  $("s-rz").textContent = (m.red || {}).zook || "";
+  $("s-rm").textContent = shortModel((m.red || {}).model);
+  $("s-game").textContent = m.game ? `GAME ${m.game}` : "";
+}
+
+function row(side, m) {
+  if (!side) {
+    const r = h("div", "row empty");
+    r.append(h("div", "names").appendChild(h("div", "z", m && m.how === "bye" ? "bye" : "—")).parentNode);
+    return r;
+  }
+  const decided = m.winner !== null && m.winner !== undefined;
+  const r = h("div", "row" + (decided ? (m.winner === side.model ? " win" : " lose") : ""));
+  const names = h("div", "names");
+  names.append(h("div", "z", side.zook || shortModel(side.model)), h("div", "m", side.model));
+  r.append(names);
+  if (m.winner === side.model && m.how && m.how !== "won" && m.how !== "bye") r.append(h("span", "tag", m.how === "both forfeit" ? "coin toss" : m.how === "forfeit" ? "walkover" : m.how));
+  if ((m.games || []).length) {
+    const g = h("div", "games");
+    for (const game of m.games) g.append(h("span", "g" + (game.winner_zook && game.winner_zook === side.zook ? " won" : "")));
+    r.append(g);
+  }
+  return r;
+}
+
+function emptyMatch() {
+  const box = h("div", "match");
+  for (let i = 0; i < 2; i++) { const r = h("div", "row empty"); r.append(h("div", "names").appendChild(h("div", "z", "—")).parentNode); box.append(r); }
+  return box;
+}
+
+function drawBracket(b) {
+  $("b-title").replaceChildren(document.createTextNode(b.event || "The knockout"), h("small", null, (n => `${n} round${n === 1 ? "" : "s"}`)(b.total_rounds || b.rounds.length)));
+  const cols = $("cols");
+  cols.replaceChildren();
+  const total = Math.max(b.total_rounds || 0, b.rounds.length);
+  const firstSize = b.rounds.length ? b.rounds[0].matches.length : 2 ** Math.max(total - 1, 0);
+  for (let r = 0; r < total; r++) {
+    const round = b.rounds[r];
+    const col = h("div", "col");
+    const head = h("div", "head");
+    head.append(h("div", "name", round ? round.name : (r === total - 1 ? "Final" : `Round ${r + 1}`)), h("div", "contest", round ? round.contest : ""));
+    const slots = h("div", "slots");
+    if (round) {
+      round.matches.forEach((m, i) => {
+        const box = h("div", "match" + (b.current && b.current[0] === r && b.current[1] === i ? " now" : ""));
+        box.append(row(m.a, m), row(m.b, m));
+        slots.append(box);
+      });
+    } else {
+      const n = Math.max(1, Math.ceil(firstSize / 2 ** r));
+      for (let i = 0; i < n; i++) slots.append(emptyMatch());
+    }
+    col.append(head, slots);
+    cols.append(col);
+  }
+  const champ = h("div", "col champ");
+  const head = h("div", "head"); head.append(h("div", "name", "Champion"), h("div", "contest", ""));
+  const slots = h("div", "slots");
+  const crown = h("div", "crown" + (b.champion ? " won" : ""));
+  crown.innerHTML = '<svg viewBox="0 0 46 34" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"><path d="M4 28 L8 8 L17 18 L23 4 L29 18 L38 8 L42 28 Z"/><path d="M4 31 H42"/></svg>';
+  crown.style.color = b.champion ? "var(--gold)" : "var(--ink-faint)";
+  crown.append(h("div", "z", b.champion ? b.champion.zook : "?"), h("div", "m", b.champion ? b.champion.model : ""));
+  slots.append(crown);
+  champ.append(head, slots);
+  cols.append(champ);
+}
+
+function draw(s) {
+  state = s;
+  const phase = s.phase || "idle";
+  document.body.dataset.phase = phase;
+  const ch = s.challenge || {};
+  $("ch-title").textContent = ch.title || "";
+  $("ch-sub").textContent = (ch.rounds_line || "").replace(/\s{2,}(?:\|\s+)?/g, " · ");  // the arena's "  " / "  |  " gaps
+  const designing = phase === "design" || phase === "showcase";
+  $("bug").classList.toggle("hidden", !(designing && ch.title));
+  $("ticker").classList.toggle("hidden", !(designing && s.challenger));
+  if (s.challenger) drawTicker(s.challenger);
+  $("score").classList.toggle("hidden", !(phase === "game" && s.match));
+  if (s.match) drawScore(s.match);
+  const bracketOn = (phase === "talk" || phase === "crown") && s.bracket;
+  $("bracket").classList.toggle("hidden", !bracketOn);
+  if (s.bracket) drawBracket(s.bracket);
+}
+
+function connect() {
+  const es = new EventSource("/events");
+  es.onmessage = (ev) => { try { draw(JSON.parse(ev.data)); } catch (err) { console.error(err); } };
+  es.onerror = () => { es.close(); setTimeout(connect, 2000); };  // the arena restarted, or isn't up yet
+}
+const params = new URLSearchParams(location.search);
+if (params.has("preview")) document.body.classList.add("preview");
+requestAnimationFrame(tickCost);
+if (params.has("once")) {  // one look at the state (e.g. a headless screenshot), no live updates
+  fetch("/state").then((r) => r.json()).then((s) => { draw(s); shownCost = targetCost; });
+} else {
+  connect();
+}
+</script>
+</body>
+</html>

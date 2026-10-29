@@ -71,6 +71,14 @@
 # commentator = "google/gemini-3.5-flash-lite"  # live commentary on the knockout games (off unless set)
 # music = false                             # --nomusic: no music, live or in the videos (the beeps stay);
 #                                           # with showtime the design songs play live while models design
+# overlay = 8765                            # --overlay: the broadcast overlay page, for an OBS Browser Source
+#                                           # (1920x1080): the design ticker, the knockout bracket, a score bug
+#
+# [arena.obs]                               # --obs (on when this table is here): OBS follows the show
+# host = "localhost"                        # (pip install -e .[obs]; the password comes from OBS's own
+# port = 4455                               #  settings or OBS_WEBSOCKET_PASSWORD)
+# record = true                             # record from the start of the session to the end
+# scenes = { design = "Design", showcase = "Showcase", game = "Game", talk = "Knockout", crown = "Crown" }
 #
 # [arena.voices]                            # --speak: the contestants' own voices, by lab or full model id
 # google = "af_heart"                       # Gemini: American female

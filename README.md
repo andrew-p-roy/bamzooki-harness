@@ -496,6 +496,44 @@ the highlights reel with music, and the Hall of Fame prompt and `/halloffame`.
 The announcer's tokens and cost are a row in the `/end` table. Everything it said is kept in
 `Transcripts/Announcer/`.
 
+#### Broadcast overlay and OBS
+
+For a recorded or streamed show, `--overlay` serves a transparent 1920×1080 page at
+http://127.0.0.1:8765/ (`--overlay <port>` for another port, `[arena] overlay = 8765` in the
+config). Add it to OBS as a **Browser Source** (1920×1080) on top of the engine window and the
+terminal. It follows the show:
+
+- **while a model designs and presents:** a ticker along the bottom shows the challenger and its
+  maker, the runs and trials it has left, its tokens, its spend counting up, its last action
+  (saved, a trial, a game, a submission) and the Zooks it has put forward. A small tag in the
+  top-left shows the challenge.
+- **in the knockout:** the bracket, round by round, with each round's contest. Byes, walkovers and
+  coin tosses are labelled, the match about to be played is lit, winners light up and losers dim,
+  and the champion takes the crown at the end.
+- **during a game** (qualifying or knockout): a score bug at the top, with green Zook (model) v red
+  Zook (model), the round, the contest and the game number.
+
+No seeds are ever shown. To see the look without the engine or any model calls, run
+`python -m bamzooki.overlay --demo` and open http://127.0.0.1:8765/?preview (`?preview` puts a
+dark stand-in for the game behind it).
+
+`--obs` drives OBS itself through its websocket (OBS 28+; `pip install -e .[obs]`). As the show
+moves on, OBS switches scenes: **Design** (a model designing and testing), **Showcase** (its
+Zook on the turntable while it presents), **Game**, **Knockout** (the bracket and the match talk)
+and **Crown**. With `record = true` OBS records from the start of the session to the end. The
+password is read from OBS's own settings, or from `OBS_WEBSOCKET_PASSWORD`, and is never printed.
+A scene OBS doesn't have is mentioned once and skipped. If OBS isn't running, the show goes on
+without it.
+
+```toml
+[arena]
+overlay = 8765
+[arena.obs]           # its presence turns --obs on
+port = 4455
+record = true
+scenes = { design = "Design", showcase = "Showcase", game = "Game", talk = "Knockout", crown = "Crown" }
+```
+
 Defaults can live in `bamzooki.toml`:
 
 ```toml
@@ -569,6 +607,8 @@ src/bamzooki/
   showtime.py   model fact sheets, Zook cards, end-of-game stills, Hall of Fame, highlights
   voice.py      --speak: the announcer read aloud (Kokoro, or the system's speech engine)
   music.py      the music (live, in the videos and the reel): tracks, loop points, each contest's track, the design songs
+  overlay.py    --overlay: the broadcast overlay's server (web/overlay.html) and the bracket it draws
+  obs.py        --obs: OBS scenes follow the show; the session is recorded
 Music/          the music (Lyria 3) and tracks.toml (loop points, tags, each contest's track, design songs)
 Model Instructions/  agent prompt, design guide, your manual copy (what models are told)
 challenges/     rules files: short.toml, full.toml (limits, scoring, hidden, qualifying, max_qualifiers)

@@ -885,3 +885,36 @@ def test_design_music_makes_way_only_for_a_qualifying_game():
     assert call("submit_design") == ["pause", "submit_design", "play"]  # the qualifying game's own music
     a.plan.current = 1  # a later round's design phase: no qualifying game
     assert call("submit_design") == ["submit_design"]
+
+
+class _FakeObs:
+    def __init__(self):
+        self.scenes = []
+
+    def scene(self, phase):
+        self.scenes.append(phase)
+
+
+def test_the_overlay_and_obs_follow_the_phases_and_the_ticker_its_model(capsys):
+    a = arena(Router(), keyboard())
+    a._phase("design")  # neither on: nothing happens
+    from bamzooki.overlay import Overlay
+
+    a.overlay, a.obs = Overlay(port=0), _FakeObs()
+    e = a.entrant
+    a._phase("design", challenger=a._ticker_card(e))
+    assert a._show_title() == "BAMZOOKi Tournament: Short Rules"
+    a.challenge = plan("full").rules
+    assert a._show_title() == "BAMZOOKi Tournament: Full Rules"
+    a._summarise("save_zook", json.dumps({"saved": True, "ref": "Crusher@1", "stats": {"Weight": "4 kg", "Components": 9},
+                                          "budget": {"runs_used": 1, "runs_left": 2, "trials_used": 0,
+                                                     "trials_left": 5}}))
+    c = a.overlay.snapshot()["challenger"]
+    assert c["model"] == "lab/model" and c["last"] == "saved Crusher@1: 4 kg, 9 parts"
+    assert (c["runs_used"], c["runs_left"], c["trials_left"]) == (1, 2, 5)
+    a._ticker(Entrant("lab/other"), cost=9.0)  # another model's spend isn't this ticker's
+    assert a.overlay.snapshot()["challenger"]["cost"] == 0.0
+    a._phase("game", match={"game": 1})
+    assert a.overlay.snapshot()["phase"] == "game" and a.obs.scenes == ["design", "game"]
+    assert "saved Crusher@1" in capsys.readouterr().out  # the terminal still gets the line
+    a.overlay.close()

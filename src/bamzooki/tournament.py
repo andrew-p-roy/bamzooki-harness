@@ -131,12 +131,14 @@ def knockout(seats: list[Seat], play: Play, say: Say, rng: random.Random | None 
              round_title: str | None = None,
              start_round: Callable[[int, int, str, list[Seat]], None] = lambda i, n, r, f: None,
              pick: Callable[[Seat, Seat, str], tuple["str | None", "str | None"]] | None = None,
-             seeded: bool = False) -> tuple[list[list[Bout]], list[tuple[int, Seat]]]:
+             seeded: bool = False,
+             on_draw: Callable[[int, str, list[tuple[Seat, "Seat | None"]]], None] = lambda i, r, d: None) -> tuple[list[list[Bout]], list[tuple[int, Seat]]]:
     """Play the whole bracket. Returns the rounds and the ranking [(place, seat)], shared places
     for entrants knocked out in the same round. round_title names every round (e.g. "Exhibition
     match" for a single match) instead of "Final", "Semi-finals", ... A bout's seats carry the
     Zooks `pick` chose for it; the ranking has the entrants' own seats. seeded: the seats are
-    ranked best first, and the first round's byes go to the top ones (else to random ones)."""
+    ranked best first, and the first round's byes go to the top ones (else to random ones).
+    on_draw(index, name, draw) is told each round's pairs (None: a bye) before it starts."""
     rng = rng or random.Random()
     rounds: list[list[Bout]] = []
     total = rounds_needed(len(seats))
@@ -155,6 +157,7 @@ def knockout(seats: list[Seat], play: Play, say: Say, rng: random.Random | None 
         field = [s for pair in draw for s in pair if s]
         name = round_title or round_name(len(field), len(rounds) + 1)
         say(f"\n  === {name} ===", "b")
+        on_draw(len(rounds), name, list(draw))
         start_round(len(rounds), total, name, field)
         bouts = []
         for a, b in draw:

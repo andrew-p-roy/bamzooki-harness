@@ -471,7 +471,8 @@ General observations:
 - [x] Models compete on one challenge in the arena (`/leaderboard`: best submission per entrant).
 - [x] The show: announcer, opponent pictures, end-of-game stills for interviews, audience picks, exhibitions, Hall of Fame, highlights, voice (§7, "The show").
 - [ ] Tournaments between models across the 12 contests, with Elo ratings, saved replays and videos. A natural next step is a challenge type where the evaluation opponent is the *other entrants'* submissions; the operator-controlled challenge file may already name them.
-- [ ] Optional: parallel challengers (needs one desktop per engine, see M2), and a show layout recording the terminal and the engine window side by side.
+- [x] Broadcast overlay and OBS control: `--overlay` serves a transparent 1920×1080 page (`bamzooki.overlay`, `web/overlay.html`; stdlib HTTP plus Server-Sent Events). It shows a design ticker (runs, trials, tokens, spend, last action), the knockout bracket (filled in from `tournament.knockout`'s `on_draw`, `before` and `after`) and a score bug during games. `--obs` switches OBS scenes by phase (design, showcase, game, talk, crown) over obs-websocket 5 and records the session (`bamzooki.obs`). One hook, `Arena._phase`, drives both. No seeds are ever in the overlay's state.
+- [ ] Optional: parallel challengers (needs one desktop per engine, see M2).
 - [ ] Hybrid search: the model proposes a body plan and an optimiser (e.g. CMA-ES) tunes the numbers, using `run_contest` as the fitness function.
 
 ---

@@ -5,6 +5,7 @@
     python tools/arena.py --challenge challenges/short.toml
     python tools/arena.py --monitor                        # one screen: test/tournament games on the right
     python tools/arena.py --full-screen                    # test/tournament games in windowed full screen
+    python tools/arena.py --showtime --overlay --obs       # the broadcast overlay page, and OBS following the show
 
 For each challenger the runner starts the bamzooki MCP server (stdio) with the challenger's full
 model name, working in the arena folder (outside the repo), and runs an agent loop over
@@ -73,7 +74,7 @@ from pathlib import Path
 
 import httpx
 
-from . import music, showtime, tournament
+from . import music, overlay, showtime, tournament
 from .announcer import DEFAULT_MODEL as DEFAULT_ANNOUNCER
 from .announcer import Announcer
 from .challenge import ChallengeState, Session, plan_from_config
@@ -309,7 +310,7 @@ class Arena:
                  show: bool = False, announcer: str | None = DEFAULT_ANNOUNCER,
                  announcer_style: str = "ringside", speak: bool = False, voice: str | None = None,
                  monitor: bool = False, fullscreen: bool = False, commentator: str | None = None,
-                 play_music: bool = True):
+                 play_music: bool = True, overlay_port: int | None = None, obs: dict | None = None):
         self.cfg = load_config()
         # --monitor: test and tournament games put the engine window on the right half of the main
         # screen with a 4:3 picture (at most 1080p's half) in it, leaving the left for this terminal.
@@ -345,6 +346,21 @@ class Arena:
 
         self.play_music = play_music
         self.design_music = Playlist(music.design_songs(music.load_tracks())) if show and play_music else None
+        # --overlay: the broadcast overlay page (an OBS Browser Source); --obs: OBS's scenes follow the
+        # show's phases, and it records the session.
+        self.overlay = None
+        if overlay_port:
+            try:
+                self.overlay = overlay.Overlay(overlay_port)
+                say(f"Overlay: {self.overlay.url}  (add it to OBS as a Browser Source, 1920x1080)", "dim")
+            except OSError as err:
+                say(f"(--overlay: can't serve on port {overlay_port} ({err}); the show goes on without it)", "y")
+        self.obs = None
+        if obs is not None:
+            from .obs import Obs
+
+            self.obs = Obs(obs, lambda line: say(line, "y"))
+            self.obs = self.obs if self.obs.on else None
         self.announcer = Announcer(self.router, announcer, announcer_style) if show and announcer else None
         self.voice = None
         if speak and self.announcer:
@@ -426,6 +442,35 @@ class Arena:
             except Exception:
                 pass
         self._stack, self.session = None, None
+
+    # --- the overlay and OBS ---
+    def _phase(self, phase: str, **state) -> None:
+        """The show moves on: the overlay shows the phase's panels and OBS switches to its scene."""
+        if ov := getattr(self, "overlay", None):
+            ov.update(phase=phase, **state)
+        if obs := getattr(self, "obs", None):
+            obs.scene(phase)
+
+    def _bracket(self, change) -> None:
+        """Change the overlay's bracket (change(state): see overlay.add_round, match_result...)."""
+        if ov := getattr(self, "overlay", None):
+            ov.edit(change)
+
+    def _show_title(self) -> str:
+        """The overlay's name for the show: "BAMZOOKi Tournament: Short Rules" (or Full, or a rules file's own name)."""
+        return f"BAMZOOKi Tournament: {self.challenge.name.replace('_', ' ').title()} Rules"
+
+    def _ticker(self, e: Entrant, **parts) -> None:
+        """The design ticker's figures, when it's showing this model."""
+        ov = getattr(self, "overlay", None)
+        if ov and (ov.snapshot().get("challenger") or {}).get("model") == e.model:
+            ov.update(challenger=parts)
+
+    def _ticker_card(self, e: Entrant) -> dict:
+        """A fresh ticker for a model starting a design phase (its runs and trials come with its first tool)."""
+        return {"model": e.model, "maker": e.facts.get("maker"), "country": e.facts.get("country"),
+                "tokens": e.tokens, "cost": round(e.cost, 6), "runs_used": None, "runs_left": None,
+                "trials_used": None, "trials_left": None, "last": "", "submitted": _zook_names(e)}
 
     # --- transcript ---
     def _log(self, kind: str, text: str, entrant: Entrant | None = None) -> None:
@@ -570,6 +615,9 @@ class Arena:
         say(f"\n=== Challenger: {model} ===", "b")
         say(f"    {showtime.card_line(self.entrant.facts)}", "dim")
         say(f"    challenge: {self.challenge.title}{self._rounds_line()}", "dim")
+        self._phase("design", challenge={"title": self._show_title(), "rounds_line": self._rounds_line()
+                                         .replace("  |  ", "", 1).strip()},
+                    challenger=self._ticker_card(self.entrant), match=None)
         if self.announcer:
             self._announce(await self.announcer.introduce(len(self.entrants), self.challenge.title,
                                                           self.entrant.facts))
@@ -638,6 +686,7 @@ class Arena:
             usage = data.get("usage") or {}
             e.cost += float(usage.get("cost") or 0)
             e.tokens += int(usage.get("total_tokens") or 0)
+            self._ticker(e, tokens=e.tokens, cost=round(e.cost, 6))
             msg = (data.get("choices") or [{}])[0].get("message") or {}
             text = (msg.get("content") or "").strip()
             thought = (msg.get("reasoning") or "").strip()
@@ -702,6 +751,7 @@ class Arena:
             try:
                 if qualifying:
                     self._design_music(False)
+                    self._phase("game", match=self._qualifying_match(e, args))
                 res = await self.session.call_tool(name, args)
                 texts, first = [], None
                 for c in res.content:
@@ -719,10 +769,20 @@ class Arena:
             finally:
                 if qualifying:
                     self._design_music(True)
+                    self._phase("design", match=None)
         self._summarise(name, first if args is not None and first else text)
         self._log(f"tool {name}", f"args: {json.dumps(args)[:2000]}\n\nresult: {text[:4000]}")
         e.messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": text})
         return images
+
+    def _qualifying_match(self, e: Entrant, args: dict) -> dict:
+        """The score bug for the qualifying game a submit_design is about to play."""
+        k = (self.plan.current or 0) + 1
+        m = self.plan.rounds[k - 1] if 0 < k <= len(self.plan.rounds) else None
+        zook = str(args.get("ref", "")).split("/")[-1].split("@")[0]
+        return {"round": f"Qualifying, round {k}" if len(self.plan.rounds) > 1 else "Qualifying",
+                "contest": m.contest if m else "", "green": {"model": e.model, "zook": zook},
+                "red": {"model": "examples", "zook": m.opponent if m else ""}, "game": None}
 
     def _summarise(self, name: str, text: str) -> None:
         """One line per tool result for the audience."""
@@ -734,48 +794,61 @@ class Arena:
         if not isinstance(d, dict):
             say(f"     {text[:160]}", "dim")
             return
+        shown: list[str] = []  # the result lines, also the overlay's ticker
+
+        def show(line: str, colour: str) -> None:
+            say(f"     {line}", colour)
+            shown.append(line)
+
         if d.get("error"):
-            say(f"     ! {d['error']}", "y")
+            show(f"! {d['error']}", "y")
         for key in ("video", "stills"):
             if d.get(key):
                 e.last_media = [p for p in (d.get("video"), d.get("stills")) if p]
         if name in ("save_zook", "edit_zook") and d.get("saved"):
             s = d.get("stats", {})
-            say(f"     saved {d['ref']}: {s.get('Weight', '?')}, {s.get('Components', '?')} parts"
-                f"{' (clamped)' if d.get('clamped') else ''}", "g")
+            show(f"saved {d['ref']}: {s.get('Weight', '?')}, {s.get('Components', '?')} parts"
+                 f"{' (clamped)' if d.get('clamped') else ''}", "g")
         elif name == "run_trial" and d.get("result"):
             m = d.get("moved") or {}
-            say(f"     {d['result'].get('name')}: {d['result'].get('value')} {d['result'].get('unit')}"
-                f"  (drift {m.get('drift_deg')} deg, fell {m.get('fell')})", "g")
+            show(f"{d['result'].get('name')}: {d['result'].get('value')} {d['result'].get('unit')}"
+                 f"  (drift {m.get('drift_deg')} deg, fell {m.get('fell')})", "g")
         elif name == "test_zook" and d.get("moved"):
             m = d["moved"]
-            say(f"     Test: {m.get('forward_cm_per_s')} cm/s forward over {m.get('seconds')} s"
-                f"  (drift {m.get('drift_deg')} deg, fell {m.get('fell')})", "g")
+            show(f"Test: {m.get('forward_cm_per_s')} cm/s forward over {m.get('seconds')} s"
+                 f"  (drift {m.get('drift_deg')} deg, fell {m.get('fell')})", "g")
         elif name == "run_contest" and "winner" in d:
             res = (f"winner {d['winner_zook']}" if d.get("winner_zook") else
                    "draw (time limit)" if d.get("status") == "timeout" else
                    "draw" if d.get("status") == "finished" else f"no result ({d.get('status')})")
-            say(f"     {d.get('contest')}: {d.get('green')} vs {d.get('red')} -> {res}", "g")
+            show(f"{d.get('contest')}: {d.get('green')} vs {d.get('red')} -> {res}", "g")
         elif name == "submit_design" and d.get("design") and not d.get("error"):
             self._took(e, d)
             n = len(self.plan.rounds)
             if "outcome" in d:
                 e.to_call = d
                 how = " (time limit)" if d["outcome"] == "draw" and d.get("status") == "timeout" else ""
-                say(f"     SUBMITTED {d['design']} for round {d['round']} of {n}: {d['outcome'].upper()}{how} "
-                    f"(score {d['score']})", "m")
+                show(f"SUBMITTED {d['design']} for round {d['round']} of {n}: {d['outcome'].upper()}{how} "
+                     f"(score {d['score']})", "m")
                 if d.get("round", 1) == 1:
-                    say("     QUALIFIED for the /contest knockout" if e.qualified else
-                        "     not qualified (it needed a round 1 qualifying win)", "m" if e.qualified else "y")
+                    show("QUALIFIED for the /contest knockout" if e.qualified else
+                         "not qualified (it needed a round 1 qualifying win)", "m" if e.qualified else "y")
                 elif d["outcome"] != "win":
-                    say("     lost its qualifying game: it forfeits this round's knockout match", "y")
+                    show("lost its qualifying game: it forfeits this round's knockout match", "y")
             elif d.get("round") is None:
-                say(f"     TEAM ZOOK {len(e.entries)} of {n}: {d['design']}", "m")
+                show(f"TEAM ZOOK {len(e.entries)} of {n}: {d['design']}", "m")
             else:
                 contest = "" if self.plan.hidden else f" ({self.plan.rounds[d['round'] - 1].contest})"
-                say(f"     PUT FORWARD {d['design']} for round {d['round']} of {n}{contest}", "m")
+                show(f"PUT FORWARD {d['design']} for round {d['round']} of {n}{contest}", "m")
         if isinstance(d.get("budget"), dict) and d["budget"].get("reminder"):
             say(f"     {d['budget']['reminder']}", "y")
+        ticker = {"last": "  ".join(shown)} if shown else {}
+        if isinstance(d.get("budget"), dict):
+            ticker.update({k: d["budget"].get(k) for k in ("runs_used", "runs_left", "trials_used", "trials_left")})
+        if name == "submit_design":
+            ticker["submitted"] = _zook_names(e)
+        if ticker:
+            self._ticker(e, **ticker)
 
     def _clip(self, text: str) -> str:
         return text if self.verbose else _clip(text)
@@ -800,6 +873,7 @@ class Arena:
         if not self.show or not e.design:
             return
         self._showcase_stop()
+        self._phase("showcase")
         from .runner import Engine
         from .sdk.store import Zoo
 
@@ -979,6 +1053,9 @@ class Arena:
             self.save_session()
         tracks = music.load_tracks() if self.play_music else {}  # no tracks: silent games and reel
         kind = "exhibition" if exhibition else "knockout"
+        self._phase("talk", bracket=overlay.new_bracket(
+            f"{self._show_title()} · Exhibition" if exhibition else self._show_title(),
+            1 if exhibition else tournament.rounds_needed(len(seats))), match=None)
         # the round's contest and music, its session round ("slot", 1-based; None = an extra early
         # round), video titles, and the last game's (video, finish)
         now = {"round": "", "game": 0, "last": None, "info": None, "event": "", "track": None, "slot": None}
@@ -1012,6 +1089,7 @@ class Arena:
                                          or [c for c in pool if c not in played] or pool)
                 info = contests.find(name, engine.install)
                 played.append(info.name)
+                self._bracket(lambda st: overlay.set_contest(st, info.name))
                 now.update(info=info, event=f"{info.name} {kind}",
                            track=music.pick_track(tracks, self.challenge, info.name))
                 return info.name
@@ -1048,6 +1126,8 @@ class Arena:
         def play(green: tournament.Seat, red: tournament.Seat, seed: int) -> tuple[str, str | None, str]:
             self._selection_stop()  # the selection screen gives way to the game
             info = now["info"]
+            self._phase("game", match={"round": now["round"], "contest": info.name, "green": overlay.side(green),
+                                       "red": overlay.side(red), "game": now["game"] + 1})
             job = Job(info, zoo.resolve(green.zook).path, zoo.resolve(red.zook).path, seed=seed,
                       duration=self.challenge.time_limit, video=True, model="Tournament", countdown=True,
                       music=now["track"], live_sound=self.show,  # the videos get the sound either way
@@ -1082,6 +1162,8 @@ class Arena:
             now["round"], now["game"] = round_name[:-1] if round_name.endswith("finals") else round_name, 0
             for s in (a, b):
                 cards[s.model] = showtime.zook_card(self.cfg.zoo_dir, s.zook)
+            self._bracket(lambda st: overlay.now_playing(st, a, b))
+            self._phase("talk", match=None)
             if len(self.plan.rounds) > 1:
                 self._selection_start(zoo, now["info"].name, a, b, f"{round_name}: {now['info'].name}")
             event = now["event"]
@@ -1097,6 +1179,8 @@ class Arena:
 
         def after(bout: tournament.Bout) -> None:
             matches[0] -= 1
+            self._bracket(lambda st: overlay.match_result(st, bout))
+            self._phase("talk", match=None)
             if not bout.games:  # a forfeit: no game to talk about
                 win, lose = _short_name(bout.winner.model), _short_name(bout.loser.model)
                 why = now.pop("forfeits", {})
@@ -1134,7 +1218,8 @@ class Arena:
             rounds, places = await asyncio.to_thread(tournament.knockout, seats, play, say, before=before,
                                                      after=after, start_round=start_round, pick=pick,
                                                      round_title="Exhibition match" if exhibition else None,
-                                                     seeded=seeded)
+                                                     seeded=seeded, on_draw=lambda i, name, draw: self._bracket(
+                                                         lambda st: overlay.add_round(st, name, draw)))
         finally:
             self._selection_stop(0)
             shutil.rmtree(pictures, ignore_errors=True)
@@ -1144,6 +1229,7 @@ class Arena:
         champ = places[0][1]
         final = next(b for b in rounds[-1] if b.winner.model == champ.model)
         champ_seat = final.winner  # with the Zook that won the last round
+        self._bracket(lambda st: st["bracket"].update(champion=overlay.side(champ_seat), current=None))
         if exhibition:
             say(f"\n*** {champ.model} wins the exhibition with {champ_seat.zook_name}! ***", "m")
             return
@@ -1247,6 +1333,7 @@ class Arena:
         say(f"\n=== {round_name} design phase: {e.model} ===", "b")
         say(f"    round {k} of {n}" + ("  |  contest secret" if self.plan.hidden else
                                        self._game_and_map(m.contest) + f"  |  opponent: {m.opponent}"), "dim")
+        self._phase("design", challenger=self._ticker_card(e), match=None)
         await self._connect(e.model)
         what = ("the contest is still SECRET: it's announced once every model's Zook for this round is in, so design "
                 "a Zook that can handle different contests" if self.plan.hidden else
@@ -1314,6 +1401,7 @@ class Arena:
     async def crown(self, champ: tournament.Seat, contest: str, path: list[str], standings: str) -> None:
         """The champion takes the floor: with --showtime the announcer crowns it and it gives a
         victory speech; either way it knows the result and the audience's next messages go to it."""
+        self._phase("crown", match=None)
         if self.announcer:
             self._announce(await self.announcer.champion(champ.model, contest, champ.zook_name,
                                                          "; ".join(path), standings))
@@ -1806,6 +1894,11 @@ def _match_zook(reply: str, options: list[str]) -> str | None:
     return None
 
 
+def _zook_names(e: Entrant) -> list[str]:
+    """The names of the Zooks a model has put forward, for the overlay."""
+    return [z.split("/", 1)[-1].split("@", 1)[0] for z in e.zooks()]
+
+
 def _entry_line(d: dict) -> str:
     """One Zook put forward: 'round 1 (Zook Sumo): Crusher@3, WIN', or 'team: Crusher@3'."""
     zook = str(d.get("design", "?")).split("/", 1)[-1]
@@ -1980,6 +2073,15 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--nomusic", "--no-music", action="store_true", default=not a_cfg.get("music", True),
                     help="no music: not under the games (live or in their videos and the highlights) and not "
                          "through the design phases; the countdown beeps stay ([arena] music = false)")
+    ap.add_argument("--overlay", nargs="?", type=int, const=overlay.DEFAULT_PORT, metavar="PORT",
+                    default=overlay.DEFAULT_PORT if a_cfg.get("overlay") is True else a_cfg.get("overlay") or None,
+                    help=f"serve the broadcast overlay on http://127.0.0.1:PORT/ (default {overlay.DEFAULT_PORT}) for an "
+                         f"OBS Browser Source, 1920x1080: the design ticker, the knockout bracket and a score bug "
+                         f"during games ([arena] overlay)")
+    ap.add_argument("--obs", action="store_true", default=isinstance(a_cfg.get("obs"), dict),
+                    help="drive OBS through its websocket: its scenes follow the show's phases, and with "
+                         "[arena.obs] record = true it records the session (pip install -e .[obs]; set it up in "
+                         "[arena.obs])")
     screen = ap.add_mutually_exclusive_group()
     screen.add_argument("--monitor", action="store_true", default=bool(a_cfg.get("monitor", False)),
                         help="single-monitor mode: test and tournament games put the engine window on the right half "
@@ -2004,15 +2106,22 @@ def main(argv: list[str] | None = None) -> None:
                   announcer_style=a.announcer_style, speak=a.speak, voice=a.voice, monitor=a.monitor,
                   fullscreen=a.full_screen,
                   commentator=None if str(a.commentator).lower() in ("", "none", "off") else a.commentator,
-                  play_music=not a.nomusic)
+                  play_music=not a.nomusic, overlay_port=a.overlay,
+                  obs=(a_cfg.get("obs") if isinstance(a_cfg.get("obs"), dict) else {}) if a.obs else None)
     if not a.keep_entries and (moved := arena.archive_entries()):
         say(f"Previous Zook Entries archived to {moved}: every model starts afresh (--keep-entries to carry on).",
             "dim")
     arena.save_session()
     say(f"Rules: {session.rules.name}{' (challenges hidden)' if session.hidden else ''}"
         f"{arena._rounds_line() if not session.hidden else ''}", "dim")
+    if arena.obs:
+        arena.obs.record(True)
     try:
         asyncio.run(arena.repl())
     finally:
         if arena.design_music:
             arena.design_music.close()
+        if arena.obs:
+            arena.obs.close()  # stops the recording
+        if arena.overlay:
+            arena.overlay.close()
